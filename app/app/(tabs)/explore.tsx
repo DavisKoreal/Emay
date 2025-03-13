@@ -1,379 +1,487 @@
-import React, { useState, useEffect } from "react";
-import { StyleSheet, Button, View, ViewStyle, TextStyle } from "react-native";
-import { CameraView, useCameraPermissions } from "expo-camera"; // Stable import
-import DropDownPicker from "react-native-dropdown-picker";
+import React, { useState, useEffect, useRef } from "react";
+import {
+  SafeAreaView,
+  View,
+  Text,
+  StyleSheet,
+  TouchableOpacity,
+  StatusBar,
+  ActivityIndicator,
+  Alert,
+  Modal,
+  Platform,
+  Dimensions,
+} from "react-native";
+import { Camera, CameraView, CameraType, BarcodeScanningResult } from "expo-camera";
+import Icon from "react-native-vector-icons/MaterialIcons";
+import { useNavigation } from "@react-navigation/native";
 
-import { Collapsible } from "@/components/Collapsible";
-import { ExternalLink } from "@/components/ExternalLink";
-import ParallaxScrollView from "@/components/ParallaxScrollView";
-import { ThemedText } from "@/components/ThemedText";
-import { ThemedView } from "@/components/ThemedView";
-import { IconSymbol } from "@/components/ui/IconSymbol";
-
-// Define types for custom components
-interface CollapsibleProps {
-  title: string;
-  children: React.ReactNode;
+// Types
+interface Phone {
+  id: string;
+  model: string;
+  imei: string;
+  status: "in_stock" | "sold" | "with_retailer";
+  dateUpdated: string;
 }
 
-interface ParallaxScrollViewProps {
-  headerBackgroundColor: { light: string; dark: string };
-  headerImage: React.ReactNode;
-  children: React.ReactNode;
-}
+// Simple GradientView component
+const GradientView = ({
+  colors,
+  style,
+  children,
+}: {
+  colors: string[];
+  style?: any;
+  children?: React.ReactNode;
+}) => {
+  return (
+    <View style={[style, { backgroundColor: colors[0] }]}>{children}</View>
+  );
+};
 
-interface ThemedTextProps {
-  type?: "title" | "defaultSemiBold";
-  children: React.ReactNode;
-  style?: TextStyle;
-}
+const BarcodeScannerPage = () => {
+  const navigation = useNavigation();
+  const [hasPermission, setHasPermission] = useState<boolean | null>(null);
+  const [scanned, setScanned] = useState(false);
+  const [scannedImei, setScannedImei] = useState<string>("");
+  const [isLoading, setIsLoading] = useState(false);
+  const [isTorchOn, setIsTorchOn] = useState(false);
+  const [isProcessingModalVisible, setIsProcessingModalVisible] = useState(false);
+  const [cameraReady, setCameraReady] = useState(false);
+  const cameraRef = useRef<CameraView>(null);
 
-interface ThemedViewProps {
-  style?: ViewStyle;
-  children: React.ReactNode;
-}
-
-interface IconSymbolProps {
-  size: number;
-  color: string;
-  name: string;
-  style: ViewStyle;
-}
-
-// Sample phone models
-const phoneModels: string[] = [
-  "iPhone 13",
-  "iPhone 13 Pro",
-  "iPhone 13 Pro Max",
-  "iPhone 14",
-  "iPhone 14 Pro",
-  "iPhone 14 Pro Max",
-  "iPhone 15",
-  "iPhone 15 Pro",
-  "iPhone 15 Pro Max",
-  "Samsung Galaxy S21",
-  "Samsung Galaxy S21+",
-  "Samsung Galaxy S21 Ultra",
-  "Samsung Galaxy S22",
-  "Samsung Galaxy S22+",
-  "Samsung Galaxy S22 Ultra",
-  "Samsung Galaxy S23",
-  "Samsung Galaxy S23+",
-  "Samsung Galaxy S23 Ultra",
-  "Google Pixel 6",
-  "Google Pixel 6 Pro",
-  "Google Pixel 7",
-  "Google Pixel 7 Pro",
-  "Google Pixel 8",
-  "Google Pixel 8 Pro",
-];
-
-// Define types for DropDownPicker items
-interface DropdownItem {
-  label: string;
-  value: string;
-}
-
-export default function ExploreScreen(): JSX.Element {
-  const [permission, requestPermission] = useCameraPermissions();
-  const [scanned, setScanned] = useState<boolean>(false);
-  const [detectedIMEI, setDetectedIMEI] = useState<string>("");
-  const [modelOpen, setModelOpen] = useState<boolean>(false);
-  const [selectedModel, setSelectedModel] = useState<string | null>(null);
-  const [statusOpen, setStatusOpen] = useState<boolean>(false);
-  const [selectedStatus, setSelectedStatus] = useState<string | null>(null);
-  const [showScanner, setShowScanner] = useState<boolean>(false);
-
+  // Request camera permission on component mount
   useEffect(() => {
-    if (showScanner && !permission) {
-      requestPermission();
-    }
-  }, [showScanner, permission, requestPermission]);
+    (async () => {
+      const { status } = await Camera.requestCameraPermissionsAsync();
+      setHasPermission(status === "granted");
+    })();
+  }, []);
 
-  const handleBarCodeScanned = ({ type, data }: { type: string; data: string }) => {
+  // Handle barcode scanning
+  const handleBarCodeScanned = ({ type, data }: BarcodeScanningResult) => {
+    if (scanned) return;
+
     setScanned(true);
-    const imeiRegex = /^\d{15}$/;
+    setIsProcessingModalVisible(true);
+
+    // Validate if the scanned data could be an IMEI
+    const imeiRegex = /^\d{15,17}$/;
+
     if (imeiRegex.test(data)) {
-      setDetectedIMEI(data);
-      setShowScanner(false);
+      // Valid IMEI format
+      setScannedImei(data);
+      processScannedIMEI(data);
     } else {
-      alert("Invalid IMEI format. Please try scanning again.");
-      setScanned(false);
+      // Not a valid IMEI format
+      setTimeout(() => {
+        setIsProcessingModalVisible(false);
+        Alert.alert(
+          "Invalid Barcode",
+          "The scanned barcode doesn't appear to be a valid IMEI number. Please try again.",
+          [
+            {
+              text: "OK",
+              onPress: () => setScanned(false),
+            },
+          ]
+        );
+      }, 1000);
     }
   };
 
-  const resetDetection = (): void => {
-    setScanned(false);
-    setDetectedIMEI("");
-    setSelectedModel(null);
-    setSelectedStatus(null);
-    setShowScanner(false);
-  };
+  // Process the scanned IMEI
+  const processScannedIMEI = (imei: string) => {
+    setIsLoading(true);
 
-  const handleConfirm = (): void => {
-    console.log({
-      imei: detectedIMEI,
-      model: selectedModel,
-      status: selectedStatus,
-    });
-    resetDetection();
-  };
+    setTimeout(() => {
+      setIsLoading(false);
+      setIsProcessingModalVisible(false);
 
-  const renderScannerView = (): JSX.Element => {
-    if (!permission) {
-      return <ThemedText>Requesting camera permission...</ThemedText>;
-    }
-
-    if (!permission.granted) {
-      return (
-        <ThemedText>
-          No access to camera. Please enable camera permissions.
-        </ThemedText>
+      Alert.alert(
+        "IMEI Scanned Successfully",
+        `Scanned IMEI: ${imei}`,
+        [
+          {
+            text: "Add to Inventory",
+            // Uncomment and type navigation if needed
+            // onPress: () => {
+            //   navigation.navigate("Home", {
+            //     scannedImei: imei,
+            //     openAddModal: true,
+            //   });
+            // },
+          },
+          {
+            text: "Scan Again",
+            onPress: () => {
+              setScannedImei("");
+              setScanned(false);
+            },
+            style: "cancel",
+          },
+        ]
       );
-    }
+    }, 1500);
+  };
 
+  // Toggle the flashlight
+  const toggleTorch = () => {
+    setIsTorchOn(!isTorchOn);
+  };
+
+  // Handler for camera ready state
+  const handleCameraReady = () => {
+    setCameraReady(true);
+  };
+
+  // Handle when user cancels scanning
+  const handleCancel = () => {
+    navigation.goBack();
+  };
+
+  if (hasPermission === null) {
     return (
-      <View style={styles.scannerContainer}>
-        <CameraView
-          style={styles.scanner}
-          facing="back"
-          barcodeScannerSettings={{
-            barcodeTypes: ["code128", "code39", "qr"], // Fixed typo: barCodeTypes -> barcodeTypes
-          }}
-          onBarcodeScanned={scanned ? undefined : handleBarCodeScanned}
+      <View style={styles.permissionContainer}>
+        <ActivityIndicator size="large" color="#0066CC" />
+        <Text style={styles.permissionText}>Requesting camera permission...</Text>
+      </View>
+    );
+  }
+
+  if (hasPermission === false) {
+    return (
+      <View style={styles.permissionContainer}>
+        <Icon name="no-photography" size={64} color="#FF6B6B" />
+        <Text style={styles.permissionText}>
+          Camera permission is required to scan barcodes.
+        </Text>
+        <TouchableOpacity
+          style={styles.permissionButton}
+          onPress={() => navigation.goBack()}
         >
-          <View style={styles.scannerOverlay}>
-            <View style={styles.scannerTargetBox} />
-            <ThemedText style={styles.scanInstructions}>
-              Position the barcode within the frame
-            </ThemedText>
+          <Text style={styles.permissionButtonText}>Go Back</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
+  return (
+    <SafeAreaView style={styles.container}>
+      <StatusBar barStyle="light-content" backgroundColor="#1A237E" />
+
+      {/* Top Header */}
+      <GradientView colors={["#1A237E", "#3949AB"]} style={styles.topHeader}>
+        <View style={styles.headerContent}>
+          <TouchableOpacity style={styles.backButton} onPress={handleCancel}>
+            <Icon name="arrow-back" size={24} color="#FFF" />
+          </TouchableOpacity>
+          <View>
+            <Text style={styles.title}>Scan IMEI</Text>
+            <Text style={styles.subtitle}>
+              Point camera at barcode to scan
+            </Text>
           </View>
-          <View style={styles.scannerControls}>
-            <Button
-              title="Cancel"
-              onPress={() => setShowScanner(false)}
-              color="gray"
-            />
-            {scanned && (
-              <Button
-                title="Scan Again"
-                onPress={() => setScanned(false)}
-                color="#2196F3"
-              />
-            )}
+          <View style={styles.placeholderView} />
+        </View>
+      </GradientView>
+
+      {/* Camera View */}
+      <View style={styles.cameraContainer}>
+      <CameraView
+        ref={cameraRef}
+        style={styles.camera}
+        facing="back"
+        onBarcodeScanned={scanned ? undefined : handleBarCodeScanned}
+        onCameraReady={handleCameraReady}
+        enableTorch={isTorchOn} // Replaced flashMode with enableTorch
+        barcodeScannerSettings={{
+          barcodeTypes: ["code39", "code128", "ean13", "qr"],
+        }}
+      >
+          
+          <View style={styles.overlay}>
+            {/* Scan area frame */}
+            <View style={styles.scanAreaFrame}>
+              <View style={styles.scanCorner} />
+              <View style={[styles.scanCorner, styles.topRight]} />
+              <View style={[styles.scanCorner, styles.bottomLeft]} />
+              <View style={[styles.scanCorner, styles.bottomRight]} />
+            </View>
+
+            {/* Scan instruction */}
+            <View style={styles.scanInstructionContainer}>
+              <Text style={styles.scanInstructionText}>
+                Align barcode within frame
+              </Text>
+            </View>
           </View>
         </CameraView>
       </View>
-    );
-  };
 
-  const renderIMEIForm = (): JSX.Element => {
-    return (
-      <View style={styles.form}>
-        <ThemedText style={styles.imeiText}>
-          Detected IMEI:{" "}
-          <ThemedText type="defaultSemiBold">{detectedIMEI}</ThemedText>
-        </ThemedText>
-
-        <View style={styles.dropdownContainer}>
-          <ThemedText style={styles.label}>Phone Model:</ThemedText>
-          <DropDownPicker
-            open={modelOpen}
-            value={selectedModel}
-            items={phoneModels.map((model) => ({ label: model, value: model }))}
-            setOpen={setModelOpen}
-            setValue={setSelectedModel}
-            placeholder="Select phone model"
-            searchable={true}
-            zIndex={3000}
-            zIndexInverse={1000}
-            style={styles.dropdown}
-            dropDownContainerStyle={styles.dropdownList}
+      {/* Bottom Controls */}
+      <View style={styles.controlsContainer}>
+        <TouchableOpacity
+          style={styles.controlButton}
+          onPress={toggleTorch}
+        >
+          <Icon
+            name={isTorchOn ? "flash-on" : "flash-off"}
+            size={26}
+            color={isTorchOn ? "#FFD700" : "#FFF"}
           />
-        </View>
+          <Text style={styles.controlText}>
+            {isTorchOn ? "Flash On" : "Flash Off"}
+          </Text>
+        </TouchableOpacity>
 
-        <View style={styles.dropdownContainer}>
-          <ThemedText style={styles.label}>Status:</ThemedText>
-          <DropDownPicker
-            open={statusOpen}
-            value={selectedStatus}
-            items={[
-              { label: "New", value: "new" },
-              { label: "Used", value: "used" },
-              { label: "Refurbished", value: "refurbished" },
-              { label: "Damaged", value: "damaged" },
-            ]}
-            setOpen={setStatusOpen}
-            setValue={setSelectedStatus}
-            placeholder="Select status"
-            zIndex={2000}
-            zIndexInverse={2000}
-            style={styles.dropdown}
-            dropDownContainerStyle={styles.dropdownList}
-          />
-        </View>
-
-        <View style={styles.buttonContainer}>
-          <Button
-            title="Confirm"
-            onPress={handleConfirm}
-            disabled={!selectedModel || !selectedStatus}
-          />
-          <Button title="Start Over" onPress={resetDetection} color="gray" />
-        </View>
-      </View>
-    );
-  };
-
-  return (
-    <ParallaxScrollView
-      headerBackgroundColor={{ light: "#D0D0D0", dark: "#353636" }}
-      headerImage={
-        <IconSymbol
-          size={310}
-          color="#808080"
-          name="chevron.left.forwardslash.chevron.right"
-          style={styles.headerImage}
-        />
-      }
-    >
-      <ThemedView style={styles.titleContainer}>
-        <ThemedText type="title">IMEI Barcode Scanner</ThemedText>
-      </ThemedView>
-
-      {showScanner ? (
-        renderScannerView()
-      ) : detectedIMEI ? (
-        renderIMEIForm()
-      ) : (
-        <View style={styles.introContainer}>
-          <ThemedText style={styles.description}>
-            Use your camera to scan an IMEI barcode from a device, then select
-            the phone model and status.
-          </ThemedText>
-
-          <Button
-            title="Start IMEI Scan"
-            onPress={() => {
-              setShowScanner(true);
+        <TouchableOpacity
+          style={[styles.controlButton, styles.scanButton]}
+          onPress={() => {
+            if (!scanned) {
+              setScanned(true);
+              handleBarCodeScanned({
+                type: "manual",
+                data: "123456789012345",
+                cornerPoints: [],
+                bounds: { origin: { x: 0, y: 0 }, size: { width: 0, height: 0 } },
+              });
+            } else {
               setScanned(false);
-            }}
-          />
+            }
+          }}
+        >
+          <Icon name={scanned ? "refresh" : "qr-code-scanner"} size={32} color="#FFF" />
+          <Text style={styles.controlText}>
+            {scanned ? "Scan Again" : "Scanning..."}
+          </Text>
+        </TouchableOpacity>
 
-          <Collapsible title="How to use this feature">
-            <ThemedText>
-              1. Point your camera at the device's IMEI barcode (usually found
-              on the retail box, back of the device, or under the battery).
-            </ThemedText>
-            <ThemedText>
-              2. The app will automatically detect the 15-digit IMEI number from
-              the barcode.
-            </ThemedText>
-            <ThemedText>
-              3. Select the phone model from the dropdown menu.
-            </ThemedText>
-            <ThemedText>4. Choose the device status.</ThemedText>
-            <ThemedText>
-              5. Click "Confirm" to submit the information.
-            </ThemedText>
-          </Collapsible>
+        <TouchableOpacity
+          style={styles.controlButton}
+          onPress={handleCancel}
+        >
+          <Icon name="close" size={26} color="#FFF" />
+          <Text style={styles.controlText}>Cancel</Text>
+        </TouchableOpacity>
+      </View>
 
-          <Collapsible title="About IMEI Numbers">
-            <ThemedText>
-              An IMEI (International Mobile Equipment Identity) is a 15-digit
-              number unique to every mobile device. It's used to identify valid
-              devices and can be used to block stolen phones.
-            </ThemedText>
-            <ThemedText>
-              You can usually find the IMEI by dialing *#06# on the device or
-              checking in Settings. Most devices also have the IMEI printed on
-              the retail box as a barcode.
-            </ThemedText>
-          </Collapsible>
+      {/* Processing Modal */}
+      <Modal
+        transparent={true}
+        visible={isProcessingModalVisible}
+        animationType="fade"
+        onRequestClose={() => setIsProcessingModalVisible(false)}
+      >
+        <View style={styles.modalBackground}>
+          <View style={styles.processingModal}>
+            <ActivityIndicator size="large" color="#0066CC" />
+            <Text style={styles.processingText}>
+              {isLoading ? "Processing IMEI..." : "Analyzing barcode..."}
+            </Text>
+            {scannedImei !== "" && (
+              <Text style={styles.imeiText}>{scannedImei}</Text>
+            )}
+          </View>
         </View>
-      )}
-    </ParallaxScrollView>
+      </Modal>
+    </SafeAreaView>
   );
-}
+};
+
+const { width } = Dimensions.get("window");
+const scanAreaSize = width * 0.7;
 
 const styles = StyleSheet.create({
-  headerImage: {
-    color: "#808080",
-    bottom: -90,
-    left: -35,
-    position: "absolute",
-  } as ViewStyle,
-  titleContainer: {
-    flexDirection: "row",
-    gap: 8,
-    marginBottom: 16,
-  } as ViewStyle,
-  introContainer: {
-    gap: 16,
-  } as ViewStyle,
-  description: {
-    marginBottom: 20,
-  } as TextStyle,
-  scannerContainer: {
-    height: 400,
-    marginVertical: 20,
-    borderRadius: 8,
-    overflow: "hidden",
-  } as ViewStyle,
-  scanner: {
+  container: {
     flex: 1,
-  } as ViewStyle,
-  scannerOverlay: {
+    backgroundColor: "#000",
+  },
+  topHeader: {
+    paddingTop: Platform.OS === "ios" ? 0 : 40,
+    paddingBottom: 16,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 5,
+    zIndex: 10,
+  },
+  headerContent: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingHorizontal: 20,
+  },
+  backButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: "rgba(255,255,255,0.2)",
+  },
+  placeholderView: {
+    width: 40,
+  },
+  title: {
+    fontSize: 20,
+    fontWeight: "bold",
+    color: "#FFF",
+    textAlign: "center",
+  },
+  subtitle: {
+    fontSize: 14,
+    color: "rgba(255,255,255,0.8)",
+    marginTop: 2,
+    textAlign: "center",
+  },
+  cameraContainer: {
+    flex: 1,
+    justifyContent: "center",
+  },
+  camera: {
+    flex: 1,
+  },
+  overlay: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,0.5)",
     justifyContent: "center",
     alignItems: "center",
-  } as ViewStyle,
-  scannerTargetBox: {
-    width: 250,
-    height: 250,
-    borderWidth: 2,
-    borderColor: "#00FF00",
-    backgroundColor: "transparent",
-  } as ViewStyle,
-  scanInstructions: {
-    color: "white",
-    marginTop: 20,
+  },
+  scanAreaFrame: {
+    width: scanAreaSize,
+    height: scanAreaSize,
+    position: "relative",
+  },
+  scanCorner: {
+    position: "absolute",
+    width: 20,
+    height: 20,
+    borderColor: "#4CAF50",
+    borderWidth: 3,
+    top: 0,
+    left: 0,
+    borderBottomWidth: 0,
+    borderRightWidth: 0,
+  },
+  topRight: {
+    right: 0,
+    left: undefined,
+    borderLeftWidth: 0,
+    borderRightWidth: 3,
+  },
+  bottomLeft: {
+    bottom: 0,
+    top: undefined,
+    borderTopWidth: 0,
+    borderBottomWidth: 3,
+  },
+  bottomRight: {
+    bottom: 0,
+    right: 0,
+    top: undefined,
+    left: undefined,
+    borderTopWidth: 0,
+    borderLeftWidth: 0,
+    borderRightWidth: 3,
+    borderBottomWidth: 3,
+  },
+  scanInstructionContainer: {
+    position: "absolute",
+    bottom: -50,
+    left: 0,
+    right: 0,
+    alignItems: "center",
+  },
+  scanInstructionText: {
+    color: "#FFF",
     fontSize: 16,
-    textAlign: "center",
-  } as TextStyle,
-  scannerControls: {
+    fontWeight: "500",
+    backgroundColor: "rgba(0,0,0,0.6)",
+    paddingHorizontal: 20,
+    paddingVertical: 8,
+    borderRadius: 20,
+    overflow: "hidden",
+  },
+  controlsContainer: {
     flexDirection: "row",
     justifyContent: "space-around",
-    padding: 20,
-    backgroundColor: "rgba(0,0,0,0.3)",
-  } as ViewStyle,
-  form: {
+    alignItems: "center",
+    backgroundColor: "#0F172A",
     paddingVertical: 20,
-    gap: 16,
-  } as ViewStyle,
+    paddingHorizontal: 10,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+  },
+  controlButton: {
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 10,
+  },
+  scanButton: {
+    backgroundColor: "#4CAF50",
+    borderRadius: 40,
+    width: 80,
+    height: 80,
+    marginHorizontal: 20,
+  },
+  controlText: {
+    color: "#FFF",
+    marginTop: 8,
+    fontSize: 12,
+  },
+  permissionContainer: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: "#F5F7FA",
+    padding: 20,
+  },
+  permissionText: {
+    fontSize: 16,
+    color: "#555",
+    textAlign: "center",
+    marginTop: 20,
+    marginBottom: 20,
+  },
+  permissionButton: {
+    backgroundColor: "#0066CC",
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    borderRadius: 10,
+  },
+  permissionButtonText: {
+    color: "#FFF",
+    fontSize: 16,
+    fontWeight: "500",
+  },
+  modalBackground: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.6)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  processingModal: {
+    backgroundColor: "#FFF",
+    borderRadius: 16,
+    padding: 24,
+    width: "80%",
+    alignItems: "center",
+  },
+  processingText: {
+    fontSize: 18,
+    fontWeight: "500",
+    color: "#333",
+    marginTop: 16,
+  },
   imeiText: {
     fontSize: 16,
-    marginBottom: 10,
-  } as TextStyle,
-  dropdownContainer: {
-    marginBottom: 30,
-    zIndex: 1000,
-  } as ViewStyle,
-  label: {
-    marginBottom: 8,
-  } as TextStyle,
-  dropdown: {
-    backgroundColor: "#f0f0f0",
-    borderColor: "#ccc",
-  } as ViewStyle,
-  dropdownList: {
-    backgroundColor: "#f0f0f0",
-    borderColor: "#ccc",
-  } as ViewStyle,
-  buttonContainer: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    marginTop: 20,
-  } as ViewStyle,
+    color: "#0066CC",
+    fontWeight: "500",
+    marginTop: 12,
+  },
 });
+
+export default BarcodeScannerPage;
