@@ -17,13 +17,13 @@ import Icon from "react-native-vector-icons/MaterialIcons";
 import { useNavigation } from "@react-navigation/native";
 
 // Types
-interface Phone {
-  id: string;
-  model: string;
-  imei: string;
-  status: "in_stock" | "sold" | "with_retailer";
-  dateUpdated: string;
-}
+// interface Phone {
+//   id: string;
+//   model: string;
+//   imei: string;
+//   status: "in_stock" | "sold" | "with_retailer";
+//   dateUpdated: string;
+// }
 
 // Simple GradientView component
 const GradientView = ({
