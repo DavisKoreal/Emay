@@ -455,7 +455,7 @@ const HomePage = () => {
             <Icon name="add" size={24} color="#FFF" />
           </TouchableOpacity>
         </View>
-        <ScrollView
+        {/* <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
           contentContainerStyle={styles.statsContainer}
@@ -477,7 +477,7 @@ const HomePage = () => {
             </Text>
             <Text style={styles.statLabel}>With Retailer</Text>
           </View>
-        </ScrollView>
+        </ScrollView> */}
       </View>
       {/* Filters */}
       <View style={styles.filtersContainer}>
@@ -764,7 +764,7 @@ const styles = StyleSheet.create({
     // adjustwidth to screensize
     width: "100%", // Adjusted to full width
     paddingVertical: 12,
-    
+
   },
   statCard: {
     width: 110,
