@@ -761,6 +761,10 @@ const styles = StyleSheet.create({
   },
   statsContainer: {
     flexDirection: "row",
+    // adjustwidth to screensize
+    width: "100%", // Adjusted to full width
+    paddingVertical: 12,
+    
   },
   statCard: {
     width: 110,
