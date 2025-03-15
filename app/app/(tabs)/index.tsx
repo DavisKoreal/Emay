@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useContext } from "react";
 import {
   SafeAreaView,
   View,
@@ -16,8 +16,13 @@ import {
   Alert,
 } from "react-native";
 import Icon from "react-native-vector-icons/MaterialIcons";
+import { useRouter } from "expo-router";
+import { AuthContext } from "../../context/AuthContext"; // Adjust path
+import { getDoc, doc, collection, getDocs, setDoc } from "firebase/firestore";
+import { firestore } from "../../config/firebase"; // Adjust path to your Firebase config
+import { Picker } from "@react-native-picker/picker";
 
-// Types
+// **Types**
 interface Phone {
   id: string;
   model: string;
@@ -26,7 +31,7 @@ interface Phone {
   dateUpdated: string;
 }
 
-// Simple GradientView component
+// **Simple GradientView Component**
 const GradientView = ({
   colors,
   style,
@@ -41,88 +46,89 @@ const GradientView = ({
   );
 };
 
+// **Phone Models List**
+const phoneModels = [
+  "iPhone 15 Pro",
+  "iPhone 15",
+  "iPhone 14 Pro",
+  "iPhone 14",
+  "iPhone 13 Pro",
+  "iPhone 13",
+  "Samsung Galaxy S25",
+  "Samsung Galaxy S25 Ultra",
+  "Samsung Galaxy S24",
+  "Samsung Galaxy S24 Ultra",
+  "Samsung Galaxy S23",
+  "Google Pixel 9",
+  "Google Pixel 8",
+  "Google Pixel 7",
+  "OnePlus 12",
+  "OnePlus 11",
+  "OnePlus 10 Pro",
+  "Xiaomi 14",
+  "Xiaomi 13",
+  "Sony Xperia 1 V",
+  "Nokia G60",
+  // Add more models as needed
+];
+
+// **HomePage Component**
 const HomePage = () => {
+  const { storeData, logout } = useContext(AuthContext); // Get storeData and logout from context
+  const router = useRouter();
+
+  // **State Definitions**
   const [searchQuery, setSearchQuery] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [phones, setPhones] = useState<Phone[]>([]);
   const [filteredPhones, setFilteredPhones] = useState<Phone[]>([]);
   const [activeFilter, setActiveFilter] = useState("all");
-
-  // Add Phone Modal State
   const [modalVisible, setModalVisible] = useState(false);
   const [newPhone, setNewPhone] = useState<Partial<Phone>>({
-    model: "",
+    model: "none",
     imei: "",
     status: "in_stock",
     dateUpdated: new Date().toISOString(),
   });
-  const [scannerActive, setScannerActive] = useState(false);
+  const [isLogoutModalVisible, setIsLogoutModalVisible] = useState(false);
 
-  // Mock data loading
+  // **Effect for Fetching Inventory from Firestore**
   useEffect(() => {
-    loadPhones();
-  }, []);
+    if (storeData && storeData.phoneNumber) {
+      const fetchInventory = async () => {
+        setIsLoading(true);
+        try {
+          const inventoryRef = collection(
+            firestore,
+            "stores",
+            storeData.phoneNumber,
+            "inventory"
+          );
+          const querySnapshot = await getDocs(inventoryRef);
+          const inventoryData = querySnapshot.docs
+            .map((doc) => ({ id: doc.id, ...doc.data() } as Phone))
+            .filter((phone) => phone.imei); // Only include phones with an IMEI
+          setPhones(inventoryData);
+          setFilteredPhones(inventoryData);
+        } catch (error) {
+          console.error("Error fetching inventory:", error);
+          Alert.alert("Error", "Failed to fetch inventory");
+        } finally {
+          setIsLoading(false);
+        }
+      };
+      fetchInventory();
+    }
+  }, [storeData]);
 
-  // Apply search filter
+  // **Effect for Filtering Phones**
   useEffect(() => {
     filterPhones(activeFilter, searchQuery);
   }, [searchQuery, activeFilter, phones]);
 
-  const loadPhones = () => {
-    setIsLoading(true);
-    setTimeout(() => {
-      const mockPhones: Phone[] = [
-        {
-          id: "1",
-          model: "iPhone 15 Pro",
-          imei: "353267890123456",
-          status: "in_stock",
-          dateUpdated: "2025-03-10T14:30:00",
-        },
-        {
-          id: "2",
-          model: "Samsung Galaxy S25",
-          imei: "357123456789012",
-          status: "sold",
-          dateUpdated: "2025-03-09T10:15:00",
-        },
-        {
-          id: "3",
-          model: "Google Pixel 9",
-          imei: "359876543210987",
-          status: "with_retailer",
-          dateUpdated: "2025-03-08T16:45:00",
-        },
-        {
-          id: "4",
-          model: "Samsung Galaxy S25 Ultra",
-          imei: "358765432109876",
-          status: "sold",
-          dateUpdated: "2025-03-07T09:20:00",
-        },
-        {
-          id: "5",
-          model: "iPhone 15",
-          imei: "352876543210987",
-          status: "in_stock",
-          dateUpdated: "2025-03-06T11:10:00",
-        },
-        {
-          id: "6",
-          model: "OnePlus 12",
-          imei: "356987654321098",
-          status: "sold",
-          dateUpdated: "2025-03-05T15:30:00",
-        },
-      ];
-      setPhones(mockPhones);
-      setFilteredPhones(mockPhones);
-      setIsLoading(false);
-    }, 1000);
-  };
-
+  // **Functions**
   const filterPhones = (filter: string, query: string) => {
-    let result = [...phones];
+    let result = phones.filter((phone) => phone.imei); // Ensure only phones with IMEI are included
     if (filter !== "all") {
       result = result.filter((phone) => phone.status === filter);
     }
@@ -165,6 +171,9 @@ const HomePage = () => {
 
   const formatDate = (dateString: string) => {
     const date = new Date(dateString);
+    if (isNaN(date.getTime())) {
+      return "Invalid Date"; // Fallback if date is invalid
+    }
     return date.toLocaleDateString("en-US", {
       month: "short",
       day: "numeric",
@@ -175,10 +184,7 @@ const HomePage = () => {
   const renderPhoneItem = ({ item }: { item: Phone }) => {
     const statusInfo = getStatusDetails(item.status);
     const getPhoneIcon = (model: string) => {
-      if (model.toLowerCase().includes("iphone")) return "phone-iphone";
-      if (model.toLowerCase().includes("samsung")) return "smartphone";
-      if (model.toLowerCase().includes("pixel")) return "tablet-android";
-      return "devices";
+      return "phone-iphone";
     };
 
     return (
@@ -191,18 +197,13 @@ const HomePage = () => {
             <Icon name={getPhoneIcon(item.model)} size={28} color="#0066CC" />
           </View>
           <View style={styles.phoneContent}>
-            {/* Header: Model only */}
             <View style={styles.phoneHeader}>
               <Text style={styles.phoneModel}>{item.model}</Text>
             </View>
-
-            {/* Middle Content: IMEI */}
             <View style={styles.imeiContainer}>
               <Icon name="fingerprint" size={16} color="#0066CC" />
               <Text style={styles.imeiText}>{item.imei}</Text>
             </View>
-
-            {/* Footer: Date and Status */}
             <View style={styles.phoneFooter}>
               <View style={styles.dateContainer}>
                 <Icon name="event" size={14} color="#888" />
@@ -258,7 +259,6 @@ const HomePage = () => {
     return phones.filter((phone) => phone.status === status).length;
   };
 
-  // Add Phone Modal Functions
   const openAddPhoneModal = () => {
     setNewPhone({
       model: "",
@@ -280,79 +280,66 @@ const HomePage = () => {
   };
 
   const validateForm = (): boolean => {
-    if (!newPhone.model || !newPhone.imei) {
-      Alert.alert("Validation Error", "Phone model and IMEI are required");
+    if (newPhone.model === "none") {
+      Alert.alert("Validation Error", "Please select a phone model");
       return false;
     }
-
-    // Check for duplicate IMEI
-    if (phones.some((phone) => phone.imei === newPhone.imei)) {
-      Alert.alert(
-        "Duplicate IMEI",
-        "A phone with this IMEI already exists in the inventory"
-      );
+    if (!newPhone.imei) {
+      Alert.alert("Validation Error", "IMEI is required");
       return false;
     }
-
-    // Validate IMEI format (typically 15-17 digits)
-    const imeiRegex = /^\d{15,17}$/;
-    if (!imeiRegex.test(newPhone.imei)) {
-      Alert.alert("Invalid IMEI", "IMEI should be 15-17 digits");
+    if (!/^\d{15}$/.test(newPhone.imei)) {
+      Alert.alert("Invalid IMEI", "IMEI must be exactly 15 digits");
       return false;
     }
-
     return true;
   };
 
-  const handleAddPhone = () => {
+  const handleAddPhone = async () => {
     if (!validateForm()) return;
-
-    const newId = (
-      Math.max(...phones.map((p) => parseInt(p.id)), 0) + 1
-    ).toString();
-
-    const phoneToAdd: Phone = {
-      id: newId,
-      model: newPhone.model!,
-      imei: newPhone.imei!,
-      status: newPhone.status as "in_stock" | "sold" | "with_retailer",
-      dateUpdated: newPhone.dateUpdated!,
-    };
-
-    // Add the new phone to the phones array
-    setPhones((prevPhones) => [...prevPhones, phoneToAdd]);
-
-    // Close the modal
-    setModalVisible(false);
-
-    // Show success message
-    Alert.alert("Success", "Phone added to inventory");
+    if (!storeData || !storeData.phoneNumber) {
+      Alert.alert("Error", "Store data not available");
+      return;
+    }
+    setIsLoading(true);
+    try {
+      const inventoryRef = doc(
+        firestore,
+        "stores",
+        storeData.phoneNumber,
+        "inventory",
+        newPhone.imei!
+      );
+      const docSnap = await getDoc(inventoryRef);
+      if (docSnap.exists()) {
+        Alert.alert("Error", "A phone with this IMEI already exists");
+        setIsLoading(false);
+        return;
+      }
+      await setDoc(inventoryRef, {
+        imei: newPhone.imei,
+        model: newPhone.model,
+        status: newPhone.status,
+        dateUpdated: new Date().toISOString(),
+      });
+      const newPhoneData: Phone = {
+        id: newPhone.imei!,
+        imei: newPhone.imei!,
+        model: newPhone.model!,
+        status: newPhone.status as "in_stock" | "sold" | "with_retailer",
+        dateUpdated: new Date().toISOString(),
+      };
+      setPhones((prevPhones) => [...prevPhones, newPhoneData]);
+      setModalVisible(false);
+      Alert.alert("Success", "Phone added to inventory");
+    } catch (error) {
+      console.error("Error adding phone:", error);
+      Alert.alert("Error", "Failed to add phone");
+    } finally {
+      setIsLoading(false);
+    }
   };
 
-  // Mock barcode scanner function
-  const handleScanBarcode = () => {
-    // In a real app, this would open the camera for scanning
-    // For this implementation, we'll just simulate finding a barcode
-    setScannerActive(true);
-
-    // Simulate scanning process with a timeout
-    setTimeout(() => {
-      // Generate a random valid IMEI
-      const randomIMEI = Array(15)
-        .fill(0)
-        .map(() => Math.floor(Math.random() * 10))
-        .join("");
-
-      // Update the IMEI field with the scanned value
-      setNewPhone((prev) => ({ ...prev, imei: randomIMEI }));
-      setScannerActive(false);
-
-      // Show success message
-      Alert.alert("IMEI Scanned", `Scanned IMEI: ${randomIMEI}`);
-    }, 2000);
-  };
-
-  // Render the status selector in the modal
   const renderStatusSelector = () => {
     const statuses = [
       {
@@ -369,7 +356,6 @@ const HomePage = () => {
         color: "#FF9800",
       },
     ];
-
     return (
       <View style={styles.statusSelectorContainer}>
         <Text style={styles.inputLabel}>Status:</Text>
@@ -414,22 +400,32 @@ const HomePage = () => {
     );
   };
 
+  const handleLogout = async () => {
+    await logout();
+    setIsLogoutModalVisible(false);
+    router.replace("/login");
+  };
+
+  // **Render**
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="light-content" backgroundColor="#1A237E" />
-      {/* Top Header */}
       <GradientView colors={["#1A237E", "#3949AB"]} style={styles.topHeader}>
         <View style={styles.headerContent}>
           <View>
             <Text style={styles.title}>Cellucity</Text>
-            <Text style={styles.subtitle}>IMEI Inventory Tracker</Text>
+            <Text style={styles.subtitle}>
+              {storeData?.name || "IMEI Inventory"}
+            </Text>
           </View>
-          <TouchableOpacity style={styles.avatarButton}>
+          <TouchableOpacity
+            style={styles.avatarButton}
+            onPress={() => setIsLogoutModalVisible(true)}
+          >
             <Icon name="account-circle" size={32} color="#FFF" />
           </TouchableOpacity>
         </View>
       </GradientView>
-      {/* Search and Stats */}
       <View style={styles.subHeader}>
         <View style={styles.searchRow}>
           <View style={styles.searchContainer}>
@@ -437,7 +433,7 @@ const HomePage = () => {
             <TextInput
               style={styles.searchInput}
               placeholder="Search by IMEI or model"
-              placeholderTextColor="#999"
+              placeholderTextColor="#999" // Light grey for visibility
               value={searchQuery}
               onChangeText={setSearchQuery}
             />
@@ -447,7 +443,6 @@ const HomePage = () => {
               </TouchableOpacity>
             )}
           </View>
-          {/* Add button moved next to search bar */}
           <TouchableOpacity
             style={styles.addButtonSmall}
             onPress={openAddPhoneModal}
@@ -455,31 +450,7 @@ const HomePage = () => {
             <Icon name="add" size={24} color="#FFF" />
           </TouchableOpacity>
         </View>
-        {/* <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.statsContainer}
-        >
-          <View style={[styles.statCard, { backgroundColor: "#D4EFDF" }]}>
-            <Icon name="inventory-2" size={24} color="#4CAF50" />
-            <Text style={styles.statValue}>{getCountByStatus("in_stock")}</Text>
-            <Text style={styles.statLabel}>In Stock</Text>
-          </View>
-          <View style={[styles.statCard, { backgroundColor: "#BBDEFB" }]}>
-            <Icon name="person" size={24} color="#2196F3" />
-            <Text style={styles.statValue}>{getCountByStatus("sold")}</Text>
-            <Text style={styles.statLabel}>Sold</Text>
-          </View>
-          <View style={[styles.statCard, { backgroundColor: "#FFE0B2" }]}>
-            <Icon name="store" size={24} color="#FF9800" />
-            <Text style={styles.statValue}>
-              {getCountByStatus("with_retailer")}
-            </Text>
-            <Text style={styles.statLabel}>With Retailer</Text>
-          </View>
-        </ScrollView> */}
       </View>
-      {/* Filters */}
       <View style={styles.filtersContainer}>
         <ScrollView
           horizontal
@@ -508,7 +479,6 @@ const HomePage = () => {
           )}
         </ScrollView>
       </View>
-      {/* Phones List */}
       {isLoading ? (
         <View style={styles.loaderContainer}>
           <ActivityIndicator size="large" color="#0066CC" />
@@ -541,7 +511,6 @@ const HomePage = () => {
           }
         />
       )}
-
       {/* Add Phone Modal */}
       <Modal
         visible={modalVisible}
@@ -563,109 +532,106 @@ const HomePage = () => {
                 <Icon name="close" size={24} color="#555" />
               </TouchableOpacity>
             </View>
-
-            {scannerActive ? (
-              <View style={styles.scannerContainer}>
-                <View style={styles.mockScanner}>
-                  <Icon name="qr-code-scanner" size={64} color="#0066CC" />
-                  <Text style={styles.scannerText}>Scanning...</Text>
-                  <ActivityIndicator
-                    size="large"
-                    color="#0066CC"
-                    style={styles.scannerLoader}
+            <ScrollView style={styles.formContainer}>
+              <View style={styles.inputContainer}>
+                <Text style={styles.inputLabel}>IMEI Number:</Text>
+                <View style={styles.textInputWrapper}>
+                  <Icon
+                    name="fingerprint"
+                    size={20}
+                    color="#777"
+                    style={styles.inputIcon}
+                  />
+                  <TextInput
+                    style={[styles.modalInput, styles.imeiInput]}
+                    placeholder="Enter 15-digit IMEI"
+                    placeholderTextColor="#999" // Light grey for visibility
+                    keyboardType="number-pad"
+                    maxLength={15}
+                    value={newPhone.imei}
+                    onChangeText={(text) =>
+                      handleInputChange("imei", text.replace(/[^0-9]/g, ""))
+                    }
                   />
                 </View>
               </View>
-            ) : (
-              <ScrollView style={styles.formContainer}>
-                {/* Phone Model Input */}
-                <View style={styles.inputContainer}>
-                  <Text style={styles.inputLabel}>Phone Model:</Text>
-                  <View style={styles.textInputWrapper}>
-                    <Icon
-                      name="smartphone"
-                      size={20}
-                      color="#777"
-                      style={styles.inputIcon}
-                    />
-                    <TextInput
-                      style={styles.modalInput}
-                      placeholder="e.g. iPhone 15 Pro"
-                      value={newPhone.model}
-                      onChangeText={(text) => handleInputChange("model", text)}
-                    />
-                  </View>
-                </View>
-
-                {/* IMEI Input with Scanner */}
-                <View style={styles.inputContainer}>
-                  <Text style={styles.inputLabel}>IMEI Number:</Text>
-                  <View style={styles.imeiInputContainer}>
-                    <View style={styles.textInputWrapper}>
-                      <Icon
-                        name="fingerprint"
-                        size={20}
-                        color="#777"
-                        style={styles.inputIcon}
-                      />
-                      <TextInput
-                        style={[styles.modalInput, styles.imeiInput]}
-                        placeholder="15-17 digit IMEI"
-                        keyboardType="number-pad"
-                        value={newPhone.imei}
-                        onChangeText={(text) => handleInputChange("imei", text)}
-                      />
-                    </View>
-                    <TouchableOpacity
-                      style={styles.scanButton}
-                      onPress={handleScanBarcode}
-                    >
-                      <Icon name="qr-code-scanner" size={20} color="#FFF" />
-                    </TouchableOpacity>
-                  </View>
-                </View>
-
-                {/* Status Selector */}
-                {renderStatusSelector()}
-
-                {/* Date Updated Field */}
-                <View style={styles.inputContainer}>
-                  <Text style={styles.inputLabel}>Date:</Text>
-                  <View style={styles.textInputWrapper}>
-                    <Icon
-                      name="calendar-today"
-                      size={20}
-                      color="#777"
-                      style={styles.inputIcon}
-                    />
-                    <Text style={styles.dateDisplay}>
-                      {formatDate(
-                        newPhone.dateUpdated || new Date().toISOString()
-                      )}
-                    </Text>
-                  </View>
-                  <Text style={styles.helperText}>
-                    Date is automatically set to today
-                  </Text>
-                </View>
-
-                {/* Form Buttons */}
-                <View style={styles.formButtonsContainer}>
-                  <TouchableOpacity
-                    style={styles.cancelButton}
-                    onPress={() => setModalVisible(false)}
+              <View style={styles.inputContainer}>
+                <Text style={styles.inputLabel}>Phone Model:</Text>
+                <View style={styles.pickerWrapper}>
+                  <Picker
+                    selectedValue={newPhone.model}
+                    onValueChange={(itemValue) =>
+                      handleInputChange("model", itemValue)
+                    }
+                    style={styles.picker}
                   >
-                    <Text style={styles.cancelButtonText}>Cancel</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={styles.submitButton}
-                    onPress={handleAddPhone}
-                  >
-                    <Text style={styles.submitButtonText}>Add Phone</Text>
-                  </TouchableOpacity>
+                    <Picker.Item label="Select a model" value="none" />
+                    {/* Default option */}
+                    {phoneModels.map((model, index) => (
+                      <Picker.Item key={index} label={model} value={model} />
+                    ))}
+                  </Picker>
                 </View>
-              </ScrollView>
-            )}
+              </View>
+              {renderStatusSelector()}
+              <View style={styles.formButtonsContainer}>
+                <TouchableOpacity
+                  style={styles.cancelButton}
+                  onPress={() => setModalVisible(false)}
+                >
+                  <Text style={styles.cancelButtonText}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.submitButton}
+                  onPress={handleAddPhone}
+                >
+                  <Text style={styles.submitButtonText}>Add Phone</Text>
+                </TouchableOpacity>
+              </View>
+            </ScrollView>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+      {/* Logout Modal */}
+      <Modal
+        visible={isLogoutModalVisible}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => setIsLogoutModalVisible(false)}
+      >
+        <KeyboardAvoidingView
+          behavior={Platform.OS === "ios" ? "padding" : "height"}
+          style={styles.modalContainer}
+        >
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Logout</Text>
+              <TouchableOpacity
+                style={styles.closeButton}
+                onPress={() => setIsLogoutModalVisible(false)}
+              >
+                <Icon name="close" size={24} color="#555" />
+              </TouchableOpacity>
+            </View>
+            <View style={styles.logoutModalContent}>
+              <Text style={styles.logoutMessage}>
+                Are you sure you want to logout?
+              </Text>
+              <View style={styles.logoutButtonsContainer}>
+                <TouchableOpacity
+                  style={styles.cancelButton}
+                  onPress={() => setIsLogoutModalVisible(false)}
+                >
+                  <Text style={styles.cancelButtonText}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.logoutButton}
+                  onPress={handleLogout}
+                >
+                  <Text style={styles.logoutButtonText}>Logout</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
           </View>
         </KeyboardAvoidingView>
       </Modal>
@@ -673,7 +639,7 @@ const HomePage = () => {
   );
 };
 
-// Add the new styles for the modal and form elements
+// **Styles**
 const styles = StyleSheet.create({
   container: {
     flex: 1,
@@ -692,7 +658,7 @@ const styles = StyleSheet.create({
   },
   subHeader: {
     backgroundColor: "#FFF",
-    paddingVertical: 16,
+    paddingVertical: 8,
     paddingHorizontal: 20,
   },
   headerContent: {
@@ -722,7 +688,7 @@ const styles = StyleSheet.create({
   searchRow: {
     flexDirection: "row",
     alignItems: "center",
-    marginBottom: 16,
+    marginBottom: 8,
   },
   searchContainer: {
     flex: 1,
@@ -731,13 +697,13 @@ const styles = StyleSheet.create({
     backgroundColor: "#F5F7FA",
     borderRadius: 12,
     paddingHorizontal: 12,
-    height: 58,
+    height: 48,
     marginRight: 12,
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 1 },
     shadowOpacity: 0.1,
     shadowRadius: 2,
-    elevation: 12,
+    elevation: 2,
   },
   searchInput: {
     flex: 1,
@@ -745,7 +711,6 @@ const styles = StyleSheet.create({
     marginLeft: 10,
     color: "#333",
   },
-  // New add button style for the small button next to search
   addButtonSmall: {
     width: 48,
     height: 48,
@@ -759,41 +724,9 @@ const styles = StyleSheet.create({
     shadowRadius: 2,
     elevation: 3,
   },
-  statsContainer: {
-    flexDirection: "row",
-    // adjustwidth to screensize
-    width: "100%", // Adjusted to full width
-    paddingVertical: 12,
-
-  },
-  statCard: {
-    width: 110,
-    height: 90,
-    borderRadius: 12,
-    padding: 12,
-    marginHorizontal: 4,
-    justifyContent: "center",
-    alignItems: "center",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 2,
-    elevation: 2,
-  },
-  statValue: {
-    fontSize: 24,
-    fontWeight: "bold",
-    color: "#222",
-    marginTop: 4,
-  },
-  statLabel: {
-    fontSize: 12,
-    color: "#666",
-    marginTop: 2,
-  },
   filtersContainer: {
     backgroundColor: "#FFF",
-    marginTop: 16,
+    marginTop: 8,
     marginHorizontal: 16,
     borderRadius: 12,
     shadowColor: "#000",
@@ -969,7 +902,6 @@ const styles = StyleSheet.create({
     color: "#0066CC",
     fontWeight: "500",
   },
-  // Modal Styles
   modalContainer: {
     flex: 1,
     justifyContent: "flex-end",
@@ -1028,21 +960,19 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: "#333",
   },
-  imeiInputContainer: {
-    flexDirection: "row",
-    alignItems: "center",
-  },
   imeiInput: {
     flex: 1,
   },
-  scanButton: {
-    backgroundColor: "#0066CC",
+  pickerWrapper: {
+    borderWidth: 1,
+    borderColor: "#DDD",
     borderRadius: 10,
-    width: 50,
+    overflow: "hidden",
+    marginTop: 8,
+  },
+  picker: {
     height: 52,
-    justifyContent: "center",
-    alignItems: "center",
-    marginLeft: 10,
+    width: "100%",
   },
   statusSelectorContainer: {
     marginBottom: 20,
@@ -1066,15 +996,6 @@ const styles = StyleSheet.create({
   statusSelectText: {
     fontSize: 12,
     color: "#555",
-  },
-  dateDisplay: {
-    fontSize: 16,
-    color: "#333",
-  },
-  helperText: {
-    fontSize: 12,
-    color: "#888",
-    marginTop: 4,
   },
   formButtonsContainer: {
     flexDirection: "row",
@@ -1109,24 +1030,33 @@ const styles = StyleSheet.create({
     color: "#FFF",
     fontWeight: "500",
   },
-  scannerContainer: {
+  logoutModalContent: {
     padding: 20,
     alignItems: "center",
-    justifyContent: "center",
-    height: 300,
   },
-  mockScanner: {
+  logoutMessage: {
+    fontSize: 16,
+    color: "#333",
+    marginBottom: 20,
+  },
+  logoutButtonsContainer: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    width: "100%",
+  },
+  logoutButton: {
+    backgroundColor: "#FF5252",
+    borderRadius: 10,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    flex: 1,
+    marginLeft: 8,
     alignItems: "center",
-    justifyContent: "center",
   },
-  scannerText: {
-    fontSize: 18,
-    color: "#0066CC",
-    marginTop: 16,
+  logoutButtonText: {
+    fontSize: 16,
+    color: "#FFF",
     fontWeight: "500",
-  },
-  scannerLoader: {
-    marginTop: 20,
   },
 });
 

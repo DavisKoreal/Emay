@@ -7,33 +7,24 @@ import {
   TouchableOpacity,
   StatusBar,
   ActivityIndicator,
-  Alert,
   Modal,
   Platform,
   Dimensions,
+  TextInput,
 } from "react-native";
-import { Camera, CameraView, CameraType, BarcodeScanningResult } from "expo-camera";
+import { Camera, CameraView } from "expo-camera";
 import Icon from "react-native-vector-icons/MaterialIcons";
-import { useNavigation } from "@react-navigation/native";
+import { useNavigation, NavigationProp } from "@react-navigation/native";
+import { RootStackParamList } from "./../types";
 
-// Types
-// interface Phone {
-//   id: string;
-//   model: string;
-//   imei: string;
-//   status: "in_stock" | "sold" | "with_retailer";
-//   dateUpdated: string;
-// }
-
-// Simple GradientView component
 const GradientView = ({
   colors,
   style,
   children,
 }: {
   colors: string[];
-  style?: any;
-  children?: React.ReactNode;
+  style?: object;
+  children: React.ReactNode;
 }) => {
   return (
     <View style={[style, { backgroundColor: colors[0] }]}>{children}</View>
@@ -41,17 +32,21 @@ const GradientView = ({
 };
 
 const BarcodeScannerPage = () => {
-  const navigation = useNavigation();
+  const navigation = useNavigation<NavigationProp<RootStackParamList>>();
   const [hasPermission, setHasPermission] = useState<boolean | null>(null);
   const [scanned, setScanned] = useState(false);
-  const [scannedImei, setScannedImei] = useState<string>("");
+  const [scannedImei, setScannedImei] = useState("");
   const [isLoading, setIsLoading] = useState(false);
-  const [isTorchOn, setIsTorchOn] = useState(false);
-  const [isProcessingModalVisible, setIsProcessingModalVisible] = useState(false);
+  const [isProcessingModalVisible, setIsProcessingModalVisible] =
+    useState(false);
   const [cameraReady, setCameraReady] = useState(false);
-  const cameraRef = useRef<CameraView>(null);
+  const [isAddPhoneModalVisible, setIsAddPhoneModalVisible] = useState(false);
+  const [phoneModel, setPhoneModel] = useState("");
+  const [phoneStatus, setPhoneStatus] = useState<
+    "in_stock" | "sold" | "with_retailer"
+  >("in_stock");
+  const cameraRef = useRef(null);
 
-  // Request camera permission on component mount
   useEffect(() => {
     (async () => {
       const { status } = await Camera.requestCameraPermissionsAsync();
@@ -59,93 +54,62 @@ const BarcodeScannerPage = () => {
     })();
   }, []);
 
-  // Handle barcode scanning
-  const handleBarCodeScanned = ({ type, data }: BarcodeScanningResult) => {
+  const handleBarCodeScanned = ({ data }: { data: string }) => {
     if (scanned) return;
-
+    console.log("Barcode scanned:", data);
     setScanned(true);
     setIsProcessingModalVisible(true);
-
-    // Validate if the scanned data could be an IMEI
     const imeiRegex = /^\d{15,17}$/;
-
     if (imeiRegex.test(data)) {
-      // Valid IMEI format
-      setScannedImei(data);
+      console.log("IMEI matched:", data);
       processScannedIMEI(data);
     } else {
-      // Not a valid IMEI format
+      console.log("IMEI did not match:", data);
       setTimeout(() => {
         setIsProcessingModalVisible(false);
-        Alert.alert(
-          "Invalid Barcode",
-          "The scanned barcode doesn't appear to be a valid IMEI number. Please try again.",
-          [
-            {
-              text: "OK",
-              onPress: () => setScanned(false),
-            },
-          ]
-        );
+        setScanned(false);
       }, 1000);
     }
   };
 
-  // Process the scanned IMEI
-  const processScannedIMEI = (imei: string) => {
+  const processScannedIMEI = (imei: string): void => {
+    console.log("Processing IMEI:", imei);
     setIsLoading(true);
-
+    setScannedImei(imei);
     setTimeout(() => {
+      console.log("Timeout finished");
       setIsLoading(false);
       setIsProcessingModalVisible(false);
-
-      Alert.alert(
-        "IMEI Scanned Successfully",
-        `Scanned IMEI: ${imei}`,
-        [
-          {
-            text: "Add to Inventory",
-            // Uncomment and type navigation if needed
-            // onPress: () => {
-            //   navigation.navigate("Home", {
-            //     scannedImei: imei,
-            //     openAddModal: true,
-            //   });
-            // },
-          },
-          {
-            text: "Scan Again",
-            onPress: () => {
-              setScannedImei("");
-              setScanned(false);
-            },
-            style: "cancel",
-          },
-        ]
-      );
+      setIsAddPhoneModalVisible(true);
     }, 1500);
   };
 
-  // Toggle the flashlight
-  const toggleTorch = () => {
-    setIsTorchOn(!isTorchOn);
+  const handleAddPhone = () => {
+    navigation.navigate("Home", {
+      newPhone: {
+        id: Date.now().toString(),
+        model: phoneModel,
+        imei: scannedImei,
+        status: phoneStatus,
+        dateUpdated: new Date().toISOString(),
+      },
+    });
+    setIsAddPhoneModalVisible(false);
+    setPhoneModel("");
+    setPhoneStatus("in_stock");
+    setScanned(false);
   };
 
-  // Handler for camera ready state
-  const handleCameraReady = () => {
-    setCameraReady(true);
-  };
-
-  // Handle when user cancels scanning
-  const handleCancel = () => {
-    navigation.goBack();
-  };
+  const handleCameraReady = () => setCameraReady(true);
+  const handleCancel = () => navigation.goBack();
 
   if (hasPermission === null) {
     return (
       <View style={styles.permissionContainer}>
         <ActivityIndicator size="large" color="#0066CC" />
-        <Text style={styles.permissionText}>Requesting camera permission...</Text>
+        <Text style={styles.permissionText}>
+          Requesting camera permission...
+        </Text>
       </View>
     );
   }
@@ -170,8 +134,6 @@ const BarcodeScannerPage = () => {
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="light-content" backgroundColor="#1A237E" />
-
-      {/* Top Header */}
       <GradientView colors={["#1A237E", "#3949AB"]} style={styles.topHeader}>
         <View style={styles.headerContent}>
           <TouchableOpacity style={styles.backButton} onPress={handleCancel}>
@@ -179,38 +141,30 @@ const BarcodeScannerPage = () => {
           </TouchableOpacity>
           <View>
             <Text style={styles.title}>Scan IMEI</Text>
-            <Text style={styles.subtitle}>
-              Point camera at barcode to scan
-            </Text>
+            <Text style={styles.subtitle}>Point camera at barcode to scan</Text>
           </View>
           <View style={styles.placeholderView} />
         </View>
       </GradientView>
 
-      {/* Camera View */}
       <View style={styles.cameraContainer}>
-      <CameraView
-        ref={cameraRef}
-        style={styles.camera}
-        facing="back"
-        onBarcodeScanned={scanned ? undefined : handleBarCodeScanned}
-        onCameraReady={handleCameraReady}
-        enableTorch={isTorchOn} // Replaced flashMode with enableTorch
-        barcodeScannerSettings={{
-          barcodeTypes: ["code39", "code128", "ean13", "qr"],
-        }}
-      >
-          
+        <CameraView
+          ref={cameraRef}
+          style={styles.camera}
+          facing="back"
+          onBarcodeScanned={scanned ? undefined : handleBarCodeScanned}
+          onCameraReady={handleCameraReady}
+          barcodeScannerSettings={{
+            barcodeTypes: ["code39", "code128", "ean13", "qr"],
+          }}
+        >
           <View style={styles.overlay}>
-            {/* Scan area frame */}
             <View style={styles.scanAreaFrame}>
               <View style={styles.scanCorner} />
               <View style={[styles.scanCorner, styles.topRight]} />
               <View style={[styles.scanCorner, styles.bottomLeft]} />
               <View style={[styles.scanCorner, styles.bottomRight]} />
             </View>
-
-            {/* Scan instruction */}
             <View style={styles.scanInstructionContainer}>
               <Text style={styles.scanInstructionText}>
                 Align barcode within frame
@@ -220,54 +174,6 @@ const BarcodeScannerPage = () => {
         </CameraView>
       </View>
 
-      {/* Bottom Controls */}
-      <View style={styles.controlsContainer}>
-        <TouchableOpacity
-          style={styles.controlButton}
-          onPress={toggleTorch}
-        >
-          <Icon
-            name={isTorchOn ? "flash-on" : "flash-off"}
-            size={26}
-            color={isTorchOn ? "#FFD700" : "#FFF"}
-          />
-          <Text style={styles.controlText}>
-            {isTorchOn ? "Flash On" : "Flash Off"}
-          </Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={[styles.controlButton, styles.scanButton]}
-          onPress={() => {
-            if (!scanned) {
-              setScanned(true);
-              handleBarCodeScanned({
-                type: "manual",
-                data: "123456789012345",
-                cornerPoints: [],
-                bounds: { origin: { x: 0, y: 0 }, size: { width: 0, height: 0 } },
-              });
-            } else {
-              setScanned(false);
-            }
-          }}
-        >
-          <Icon name={scanned ? "refresh" : "qr-code-scanner"} size={32} color="#FFF" />
-          <Text style={styles.controlText}>
-            {scanned ? "Scan Again" : "Scanning..."}
-          </Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={styles.controlButton}
-          onPress={handleCancel}
-        >
-          <Icon name="close" size={26} color="#FFF" />
-          <Text style={styles.controlText}>Cancel</Text>
-        </TouchableOpacity>
-      </View>
-
-      {/* Processing Modal */}
       <Modal
         transparent={true}
         visible={isProcessingModalVisible}
@@ -281,8 +187,79 @@ const BarcodeScannerPage = () => {
               {isLoading ? "Processing IMEI..." : "Analyzing barcode..."}
             </Text>
             {scannedImei !== "" && (
-              <Text style={styles.imeiText}>{scannedImei}</Text>
+              <Text style={styles.imeiText}>IMEI: {scannedImei}</Text>
             )}
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        transparent={true}
+        visible={isAddPhoneModalVisible}
+        animationType="slide"
+        onRequestClose={() => setIsAddPhoneModalVisible(false)}
+      >
+        <View style={styles.modalBackground}>
+          <View style={styles.addPhoneModal}>
+            <Text style={styles.modalTitle}>Add Phone Details</Text>
+            <Text style={styles.imeiText}>IMEI: {scannedImei}</Text>
+            <TextInput
+              style={styles.input}
+              placeholder="Phone Model"
+              value={phoneModel}
+              onChangeText={setPhoneModel}
+            />
+            <View style={styles.statusContainer}>
+              <Text>Status: </Text>
+              <TouchableOpacity onPress={() => setPhoneStatus("in_stock")}>
+                <Text
+                  style={
+                    phoneStatus === "in_stock"
+                      ? styles.selectedStatus
+                      : styles.statusOption
+                  }
+                >
+                  In Stock
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={() => setPhoneStatus("sold")}>
+                <Text
+                  style={
+                    phoneStatus === "sold"
+                      ? styles.selectedStatus
+                      : styles.statusOption
+                  }
+                >
+                  Sold
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={() => setPhoneStatus("with_retailer")}>
+                <Text
+                  style={
+                    phoneStatus === "with_retailer"
+                      ? styles.selectedStatus
+                      : styles.statusOption
+                  }
+                >
+                  With Retailer
+                </Text>
+              </TouchableOpacity>
+            </View>
+            <TouchableOpacity
+              style={styles.submitButton}
+              onPress={handleAddPhone}
+            >
+              <Text style={styles.submitButtonText}>Add to Inventory</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.cancelButton}
+              onPress={() => {
+                setIsAddPhoneModalVisible(false);
+                setScanned(false);
+              }}
+            >
+              <Text style={styles.cancelButtonText}>Cancel</Text>
+            </TouchableOpacity>
           </View>
         </View>
       </Modal>
@@ -296,11 +273,13 @@ const scanAreaSize = width * 0.7;
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "#000",
+    backgroundColor: "#F5F7FA",
   },
   topHeader: {
     paddingTop: Platform.OS === "ios" ? 0 : 40,
     paddingBottom: 16,
+    borderBottomLeftRadius: 20,
+    borderBottomRightRadius: 20,
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.1,
@@ -322,28 +301,19 @@ const styles = StyleSheet.create({
     alignItems: "center",
     backgroundColor: "rgba(255,255,255,0.2)",
   },
-  placeholderView: {
-    width: 40,
-  },
+  placeholderView: { width: 40 },
   title: {
-    fontSize: 20,
+    fontSize: 28,
     fontWeight: "bold",
     color: "#FFF",
-    textAlign: "center",
   },
   subtitle: {
     fontSize: 14,
     color: "rgba(255,255,255,0.8)",
     marginTop: 2,
-    textAlign: "center",
   },
-  cameraContainer: {
-    flex: 1,
-    justifyContent: "center",
-  },
-  camera: {
-    flex: 1,
-  },
+  cameraContainer: { flex: 1, justifyContent: "center" },
+  camera: { flex: 1 },
   overlay: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,0.5)",
@@ -403,34 +373,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingVertical: 8,
     borderRadius: 20,
-    overflow: "hidden",
-  },
-  controlsContainer: {
-    flexDirection: "row",
-    justifyContent: "space-around",
-    alignItems: "center",
-    backgroundColor: "#0F172A",
-    paddingVertical: 20,
-    paddingHorizontal: 10,
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-  },
-  controlButton: {
-    alignItems: "center",
-    justifyContent: "center",
-    padding: 10,
-  },
-  scanButton: {
-    backgroundColor: "#4CAF50",
-    borderRadius: 40,
-    width: 80,
-    height: 80,
-    marginHorizontal: 20,
-  },
-  controlText: {
-    color: "#FFF",
-    marginTop: 8,
-    fontSize: 12,
   },
   permissionContainer: {
     flex: 1,
@@ -452,11 +394,7 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     borderRadius: 10,
   },
-  permissionButtonText: {
-    color: "#FFF",
-    fontSize: 16,
-    fontWeight: "500",
-  },
+  permissionButtonText: { color: "#FFF", fontSize: 16, fontWeight: "500" },
   modalBackground: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,0.6)",
@@ -481,7 +419,49 @@ const styles = StyleSheet.create({
     color: "#0066CC",
     fontWeight: "500",
     marginTop: 12,
+    marginBottom: 12,
   },
+  addPhoneModal: {
+    backgroundColor: "#FFF",
+    borderRadius: 16,
+    padding: 24,
+    width: "80%",
+    alignItems: "center",
+  },
+  modalTitle: { fontSize: 18, fontWeight: "bold", marginBottom: 16 },
+  input: {
+    borderWidth: 1,
+    borderColor: "#DDD",
+    borderRadius: 8,
+    padding: 10,
+    width: "100%",
+    marginBottom: 16,
+  },
+  statusContainer: {
+    flexDirection: "row",
+    justifyContent: "space-around",
+    width: "100%",
+    marginBottom: 16,
+  },
+  statusOption: { fontSize: 16, color: "#555" },
+  selectedStatus: { fontSize: 16, color: "#0066CC", fontWeight: "bold" },
+  submitButton: {
+    backgroundColor: "#0066CC",
+    padding: 12,
+    borderRadius: 8,
+    width: "100%",
+    alignItems: "center",
+    marginBottom: 8,
+  },
+  submitButtonText: { color: "#FFF", fontSize: 16, fontWeight: "500" },
+  cancelButton: {
+    backgroundColor: "#F5F5F5",
+    padding: 12,
+    borderRadius: 8,
+    width: "100%",
+    alignItems: "center",
+  },
+  cancelButtonText: { color: "#666", fontSize: 16, fontWeight: "500" },
 });
 
 export default BarcodeScannerPage;
