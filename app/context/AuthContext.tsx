@@ -17,8 +17,8 @@ interface StoreData {
   phoneNumber: string;
   name: string;
   password: string;
-  createdAt?: string;
-  updatedAt?: string;
+  createdAt?: Date;
+  updatedAt?: Date;
 }
 
 // Define the AuthContext type with phoneNumber instead of email
@@ -54,11 +54,17 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
       const storesRef = collection(db, "stores");
       const q = query(storesRef, where("phoneNumber", "==", phoneNumber));
       const querySnapshot = await getDocs(q);
-
+      
       if (!querySnapshot.empty) {
         const storeDoc = querySnapshot.docs[0];
-        const data = storeDoc.data() as StoreData;
-        return data;
+        const data = storeDoc.data();
+        
+        // Convert Firestore timestamps to JS Date objects
+        return {
+          ...data,
+          createdAt: normalizeDate(data.createdAt),
+          updatedAt: normalizeDate(data.updatedAt)
+        } as StoreData;
       }
       return null;
     } catch (error) {
@@ -67,16 +73,33 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
     }
   };
 
+  const normalizeDate = (dateValue: any): Date | undefined => {
+    if (dateValue && typeof dateValue.toDate === "function") {
+      return dateValue.toDate();
+    } else if (dateValue && typeof dateValue === "string") {
+      const parsedDate = new Date(dateValue);
+      return isNaN(parsedDate.getTime()) ? undefined : parsedDate;
+    }
+    return undefined;
+  };
+  
   // Login function updated to use phoneNumber
   const login = async (phoneNumber: string) => {
     try {
       setIsLoading(true);
       const data = await fetchStoreDataByPhoneNumber(phoneNumber);
-
+      
       if (data) {
-        setStoreData(data);
+        // Before storing in AsyncStorage, ensure proper date serialization
+        const storeDataForStorage = {
+          ...data,
+          createdAt: data.createdAt ? data.createdAt.toISOString() : undefined,
+          updatedAt: data.updatedAt ? data.updatedAt.toISOString() : undefined
+        };
+        
+        setStoreData(data); // Keep Date objects in memory
         await AsyncStorage.setItem("loggedInUser", phoneNumber);
-        await AsyncStorage.setItem("storeData", JSON.stringify(data));
+        await AsyncStorage.setItem("storeData", JSON.stringify(storeDataForStorage));
       } else {
         throw new Error("Store not found");
       }
@@ -108,9 +131,18 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
       try {
         const storedPhoneNumber = await AsyncStorage.getItem("loggedInUser");
         const storedStoreData = await AsyncStorage.getItem("storeData");
-
+        
         if (storedPhoneNumber && storedStoreData) {
-          setStoreData(JSON.parse(storedStoreData));
+          const parsedData = JSON.parse(storedStoreData);
+          
+          // Convert ISO string dates back to Date objects
+          const hydratedData = {
+            ...parsedData,
+            createdAt: parsedData.createdAt ? new Date(parsedData.createdAt) : undefined,
+            updatedAt: parsedData.updatedAt ? new Date(parsedData.updatedAt) : undefined
+          };
+          
+          setStoreData(hydratedData);
         }
       } catch (error) {
         console.error("Error loading stored store data:", error);
@@ -119,7 +151,7 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
         setIsInitialized(true);
       }
     };
-
+    
     loadStoreData();
   }, []);
 

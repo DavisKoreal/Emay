@@ -81,7 +81,8 @@ export default function PasscodeScreen() {
 
     try {
       const storesRef = collection(db, "stores");
-      const q = query(storesRef, where("phoneNumber", "==", phoneNumber));
+      const cleanedPhone = phoneNumber.replace(/\D/g, "");
+      const q = query(storesRef, where("phoneNumber", "==", cleanedPhone));
       const querySnapshot = await getDocs(q);
 
       if (!querySnapshot.empty) {
@@ -124,13 +125,13 @@ export default function PasscodeScreen() {
       if (newPasscode.length === 4) {
         setLoading(true);
         try {
-          const storedPasscode = await fetchPasscode(phoneNumber);
+          const cleanedPhone = phoneNumber.replace(/\D/g, "");
+          const storedPasscode = await fetchPasscode(cleanedPhone);
           if (storedPasscode && newPasscode === storedPasscode) {
             await AsyncStorage.setItem("lastOpenedTime", Date.now().toString());
-            await AsyncStorage.setItem("savedPhoneNumber", phoneNumber);
-            await AsyncStorage.setItem("loggedInUser", phoneNumber);
-
-            await login(phoneNumber);
+            await AsyncStorage.setItem("savedPhoneNumber", cleanedPhone);
+            await AsyncStorage.setItem("loggedInUser", cleanedPhone);
+            await login(cleanedPhone);
             router.replace("/(tabs)");
           } else {
             setPasscode("");
