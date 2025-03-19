@@ -1,486 +1,437 @@
-import React, { useState, useEffect, useContext } from "react";
+import React, { useState, useContext, useEffect } from "react";
 import {
   SafeAreaView,
   View,
   Text,
   StyleSheet,
   TouchableOpacity,
-  FlatList,
-  TextInput,
   ActivityIndicator,
-  ScrollView,
   Modal,
-  KeyboardAvoidingView,
   Platform,
+  Dimensions,
+  TextInput,
   Alert,
 } from "react-native";
+import { CameraView, useCameraPermissions } from "expo-camera";
 import Icon from "react-native-vector-icons/MaterialIcons";
-import { useRouter } from "expo-router";
-import { AuthContext } from "../../context/AuthContext"; // Adjust path
-import { getDoc, doc, collection, getDocs, setDoc } from "firebase/firestore";
-import { firestore } from "../../config/firebase"; // Adjust path to your Firebase config
-import { Picker } from "@react-native-picker/picker";
+import { useNavigation } from "@react-navigation/native";
 import { StatusBar } from "expo-status-bar";
+import { AuthContext } from "../../context/AuthContext";
+import { app } from "../../config/firebase";
+import {
+  getFirestore,
+  doc,
+  getDoc,
+  setDoc,
+  updateDoc,
+  deleteDoc,
+  serverTimestamp,
+} from "firebase/firestore";
 
-// **Types**
-interface Phone {
-  id: string;
-  model: string;
+// Initialize Firestore
+const db = getFirestore(app);
+
+// Define InventoryData interface
+interface InventoryData {
   imei: string;
+  model: string;
   status: "in_stock" | "sold" | "with_retailer";
-  dateUpdated: Date; // Changed from string to Date
 }
 
-// **Simple GradientView Component**
-const GradientView = ({
-  colors,
-  style,
-  children,
-}: {
-  colors: string[];
-  style?: any;
+// Simple background component instead of gradient
+const HeaderBackground: React.FC<{
+  style?: object;
   children?: React.ReactNode;
-}) => {
+}> = ({ style, children }) => {
   return (
-    <View style={[style, { backgroundColor: colors[0] }]}>{children}</View>
+    <View style={[style, { backgroundColor: "#1A237E" }]}>{children}</View>
   );
 };
 
-// **Phone Models List**
-const phoneModels = [
-  "iPhone 15 Pro",
-  "iPhone 15",
-  "iPhone 14 Pro",
-  "iPhone 14",
-  "iPhone 13 Pro",
-  "iPhone 13",
-  "Samsung Galaxy S25",
-  "Samsung Galaxy S25 Ultra",
-  "Samsung Galaxy S24",
-  "Samsung Galaxy S24 Ultra",
-  "Samsung Galaxy S23",
-  "Google Pixel 9",
-  "Google Pixel 8",
-  "Google Pixel 7",
-  "OnePlus 12",
-  "OnePlus 11",
-  "OnePlus 10 Pro",
-  "Xiaomi 14",
-  "Xiaomi 13",
-  "Sony Xperia 1 V",
-  "Nokia G60",
-  // Add more models as needed
-];
+const BarcodeScannerPage = () => {
+  const [permission, requestPermission] = useCameraPermissions();
+  const navigation = useNavigation();
+  const { storeData } = useContext(AuthContext);
 
-// **HomePage Component**
-const HomePage = () => {
-  const { storeData, logout } = useContext(AuthContext); // Get storeData and logout from context
-  const router = useRouter();
-  const [modalVisible, setModalVisible] = useState(false);
+  // Core state
+  const [scanning, setScanning] = useState(true);
+  const [loading, setLoading] = useState(false);
+  const [showModal, setShowModal] = useState(false);
 
-  // **State Definitions**
-  const [searchQuery, setSearchQuery] = useState("");
-  const [isLoading, setIsLoading] = useState(false);
-  const [phones, setPhones] = useState<Phone[]>([]);
-  const [filteredPhones, setFilteredPhones] = useState<Phone[]>([]);
-  const [activeFilter, setActiveFilter] = useState("all");
-  const [isLogoutModalVisible, setIsLogoutModalVisible] = useState(false);
+  // Phone data state
+  const [scannedImei, setScannedImei] = useState("");
+  const [phoneModel, setPhoneModel] = useState("");
+  const [phoneStatus, setPhoneStatus] = useState<
+    "in_stock" | "sold" | "with_retailer"
+  >("in_stock");
+  const [phoneExists, setPhoneExists] = useState(false);
+  const [errorMessage, setErrorMessage] = useState("");
 
-  // **Effect for Fetching Inventory from Firestore**
-  useEffect(() => {
-    if (storeData && storeData.phoneNumber) {
-      // In the useEffect for fetching inventory, update the timestamp handling
-      const fetchInventory = async () => {
-        setIsLoading(true);
-        try {
-          const inventoryRef = collection(
-            firestore,
-            "stores",
-            storeData.phoneNumber,
-            "inventory"
-          );
-          const querySnapshot = await getDocs(inventoryRef);
-          const inventoryData = querySnapshot.docs
-            .map((doc) => {
-              const data = doc.data();
-              return {
-                id: doc.id,
-                ...data,
-                // Convert Firestore timestamp to JS Date
-                dateUpdated: data.dateUpdated
-                  ? data.dateUpdated.toDate()
-                  : new Date(),
-              } as Phone;
-            })
-            .filter((phone) => phone.imei);
-          setPhones(inventoryData);
-          setFilteredPhones(inventoryData);
-        } catch (error) {
-          console.error("Error fetching inventory:", error);
-          Alert.alert("Error", "Failed to fetch inventory");
-        } finally {
-          setIsLoading(false);
-        }
-      };
-      fetchInventory();
-    }
-  }, [storeData]);
+  // Handle QR code scan result
+  const handleBarcodeScanned = async ({ data }: { data: string }) => {
+    if (!scanning) return;
 
-  // **Effect for Filtering Phones**
-  useEffect(() => {
-    filterPhones(activeFilter, searchQuery);
-  }, [searchQuery, activeFilter, phones]);
+    setScanning(false);
+    setLoading(true);
 
-  // **Functions**
-  const filterPhones = (filter: string, query: string) => {
-    let result = phones.filter((phone) => phone.imei); // Ensure only phones with IMEI are included
-    if (filter !== "all") {
-      result = result.filter((phone) => phone.status === filter);
-    }
-    if (query.trim() !== "") {
-      const lowercaseQuery = query.toLowerCase();
-      result = result.filter(
-        (phone) =>
-          phone.imei.includes(lowercaseQuery) ||
-          phone.model.toLowerCase().includes(lowercaseQuery)
-      );
-    }
-    setFilteredPhones(result);
-  };
+    try {
+      // Parse QR code data (expected format: "IMEI Model")
+      const qrRegex = /^(\d{15,17}) (.+)$/;
+      const match = data.match(qrRegex);
 
-  const getStatusDetails = (status: string) => {
-    switch (status) {
-      case "in_stock":
-        return { label: "In Stock", color: "#4CAF50", icon: "inventory-2" };
-      case "sold":
-        return { label: "Sold", color: "#2196F3", icon: "person" };
-      case "with_retailer":
-        return { label: "With Retailer", color: "#FF9800", icon: "store" };
-      default:
-        return { label: "Unknown", color: "#757575", icon: "help" };
-    }
-  };
-
-  const getDateLabel = (status: string) => {
-    switch (status) {
-      case "in_stock":
-        return "Added on";
-      case "sold":
-        return "Sold on";
-      case "with_retailer":
-        return "Left on";
-      default:
-        return "Updated on";
-    }
-  };
-
-  const formatDate = (date: Date) => {
-    if (!date || !(date instanceof Date) || isNaN(date.getTime())) {
-      return "Invalid Date"; // Fallback if date is invalid
-    }
-    return date.toLocaleDateString("en-US", {
-      month: "short",
-      day: "numeric",
-      year: "numeric",
-    });
-  };
-
-  const renderPhoneItem = ({ item }: { item: Phone }) => {
-    const statusInfo = getStatusDetails(item.status);
-    const getPhoneIcon = (model: string) => {
-      return "phone-iphone";
-    };
-
-    return (
-      <TouchableOpacity
-        style={styles.phoneItem}
-        onPress={() => console.log("Selected phone with IMEI:", item.imei)}
-      >
-        <View style={styles.phoneItemInner}>
-          <View style={styles.phoneIconWrapper}>
-            <Icon name={getPhoneIcon(item.model)} size={28} color="#0066CC" />
-          </View>
-          <View style={styles.phoneContent}>
-            <View style={styles.phoneHeader}>
-              <Text style={styles.phoneModel}>{item.model}</Text>
-            </View>
-            <View style={styles.imeiContainer}>
-              <Icon name="fingerprint" size={16} color="#0066CC" />
-              <Text style={styles.imeiText}>{item.imei}</Text>
-            </View>
-            <View style={styles.phoneFooter}>
-              <View style={styles.dateContainer}>
-                <Icon name="event" size={14} color="#888" />
-                <Text style={styles.dateText}>
-                  {getDateLabel(item.status)} {formatDate(item.dateUpdated)}
-                </Text>
-              </View>
-              <View
-                style={[
-                  styles.statusBadge,
-                  { backgroundColor: statusInfo.color },
-                ]}
-              >
-                <Icon
-                  name={statusInfo.icon}
-                  size={14}
-                  color="#fff"
-                  style={styles.statusIcon}
-                />
-                <Text style={styles.statusText}>{statusInfo.label}</Text>
-              </View>
-            </View>
-          </View>
-        </View>
-      </TouchableOpacity>
-    );
-  };
-
-  const renderFilterButton = (filter: string, label: string, icon: string) => {
-    const isActive = activeFilter === filter;
-    return (
-      <TouchableOpacity
-        style={[styles.filterButton, isActive && styles.filterButtonActive]}
-        onPress={() => setActiveFilter(filter)}
-      >
-        <View
-          style={[
-            styles.filterIconWrapper,
-            isActive && styles.filterIconWrapperActive,
-          ]}
-        >
-          <Icon name={icon} size={18} color={isActive ? "#FFF" : "#555"} />
-        </View>
-        <Text style={[styles.filterText, isActive && styles.filterTextActive]}>
-          {label}
-        </Text>
-      </TouchableOpacity>
-    );
-  };
-
-  const getCountByStatus = (status: string) => {
-    if (status === "all") return phones.length;
-    return phones.filter((phone) => phone.status === status).length;
-  };
-
-  const handleLogout = async () => {
-    await logout();
-    setIsLogoutModalVisible(false);
-    router.replace("/login");
-  };
-
-  const refreshData = async () => {
-    if (storeData && storeData.phoneNumber) {
-      setIsLoading(true);
-      try {
-        const inventoryRef = collection(
-          firestore,
-          "stores",
-          storeData.phoneNumber,
-          "inventory"
-        );
-        const querySnapshot = await getDocs(inventoryRef);
-        const inventoryData = querySnapshot.docs
-          .map((doc) => {
-            const data = doc.data();
-            return { 
-              id: doc.id, 
-              ...data,
-              dateUpdated: data.dateUpdated ? data.dateUpdated.toDate() : new Date()
-            } as Phone;
-          })
-          .filter((phone) => phone.imei);
-        setPhones(inventoryData);
-        setFilteredPhones(inventoryData);
-        Alert.alert("Success", "Inventory refreshed successfully");
-      } catch (error) {
-        console.error("Error refreshing inventory:", error);
-        Alert.alert("Error", "Failed to refresh inventory");
-      } finally {
-        setIsLoading(false);
+      if (!match) {
+        throw new Error("Invalid QR code format");
       }
+
+      const imei = match[1];
+      const model = match[2];
+
+      // Check if phone exists in inventory
+      if (!storeData?.phoneNumber) {
+        throw new Error("Store data is missing. Please log in again.");
+      }
+
+      if (!storeData) {
+        throw new Error("Store data is missing. Please log in again.");
+      }
+      if (!storeData) {
+        throw new Error("Store data is missing. Please log in again.");
+      }
+      const phoneDoc = await getDoc(
+        doc(db, `stores/${storeData.phoneNumber}/inventory`, imei)
+      );
+
+      // Set state based on whether phone exists
+      if (phoneDoc.exists()) {
+        const data = phoneDoc.data() as InventoryData;
+        setPhoneExists(true);
+        setPhoneModel(data.model);
+        setPhoneStatus(data.status);
+      } else {
+        setPhoneExists(false);
+        setPhoneModel(model);
+        setPhoneStatus("in_stock");
+      }
+
+      setScannedImei(imei);
+      setShowModal(true);
+    } catch (error) {
+      Alert.alert(
+        "Error",
+        error instanceof Error ? error.message : "Failed to process QR code"
+      );
+      resetScan();
+    } finally {
+      setLoading(false);
     }
   };
 
-  // **Render**
+  // Add phone to inventory
+  const handleAddPhone = async () => {
+    if (!scannedImei || !phoneModel) {
+      setErrorMessage("Model is required");
+      return;
+    }
+
+    setLoading(true);
+
+    try {
+      if (!storeData) {
+        setErrorMessage("Store data is missing. Please log in again.");
+        setLoading(false);
+        return;
+      }
+      await setDoc(
+        doc(db, `stores/${storeData.phoneNumber}/inventory`, scannedImei),
+        {
+          imei: scannedImei,
+          model: phoneModel,
+          status: phoneStatus,
+          createdAt: serverTimestamp(),
+          dateUpdated: serverTimestamp(),
+        }
+      );
+
+      Alert.alert("Success", "Phone added to inventory");
+      resetScan();
+    } catch (error) {
+      setErrorMessage("Failed to add phone. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Update phone status
+  const handleUpdatePhone = async () => {
+    setLoading(true);
+
+    try {
+      if (!storeData) {
+        setErrorMessage("Store data is missing. Please log in again.");
+        setLoading(false);
+        return;
+      }
+      await updateDoc(
+        doc(db, `stores/${storeData.phoneNumber}/inventory`, scannedImei),
+        {
+          status: phoneStatus,
+          dateUpdated: serverTimestamp(),
+        }
+      );
+
+      Alert.alert("Success", "Phone status updated");
+      resetScan();
+    } catch (error) {
+      setErrorMessage("Failed to update phone. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Delete phone from inventory
+  const handleDeletePhone = async () => {
+    setLoading(true);
+
+    try {
+      if (!storeData) {
+        setErrorMessage("Store data is missing. Please log in again.");
+        setLoading(false);
+        return;
+      }
+      await deleteDoc(
+        doc(db, `stores/${storeData.phoneNumber}/inventory`, scannedImei)
+      );
+
+      Alert.alert("Success", "Phone deleted from inventory");
+      resetScan();
+    } catch (error) {
+      setErrorMessage("Failed to delete phone. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Reset all states
+  const resetScan = () => {
+    setShowModal(false);
+    setScannedImei("");
+    setPhoneModel("");
+    setPhoneStatus("in_stock");
+    setPhoneExists(false);
+    setErrorMessage("");
+
+    // Delay enabling scanning to prevent immediate re-scan
+    setTimeout(() => {
+      setScanning(true);
+    }, 1000);
+  };
+
+  // Permission handling
+  if (!permission) {
+    return (
+      <View style={styles.permissionContainer}>
+        <ActivityIndicator size="large" color="#0066CC" />
+        <Text style={styles.permissionText}>
+          Requesting camera permission...
+        </Text>
+      </View>
+    );
+  }
+
+  if (!permission.granted) {
+    return (
+      <View style={styles.permissionContainer}>
+        <Icon name="no-photography" size={64} color="#FF6B6B" />
+        <Text style={styles.permissionText}>
+          Camera permission is required to scan QR codes.
+        </Text>
+        <TouchableOpacity
+          style={styles.permissionButton}
+          onPress={requestPermission}
+        >
+          <Text style={styles.permissionButtonText}>Grant Permission</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar style="light" backgroundColor="#1A237E" />
-      <GradientView colors={["#1A237E", "#3949AB"]} style={styles.topHeader}>
+
+      <HeaderBackground style={styles.topHeader}>
         <View style={styles.headerContent}>
-          <View>
-            <Text style={styles.title}>Cellucity</Text>
-            <Text style={styles.subtitle}>
-              {storeData?.name || "IMEI Inventory"}
-            </Text>
-          </View>
-          <TouchableOpacity
-            style={styles.avatarButton}
-            onPress={() => setIsLogoutModalVisible(true)}
-          >
-            <Icon name="account-circle" size={32} color="#FFF" />
-          </TouchableOpacity>
+          <Text style={styles.title}>Scan QR Code</Text>
+          <Text style={styles.subtitle}>Point camera at QR code to scan</Text>
         </View>
-      </GradientView>
-      <View style={styles.subHeader}>
-        <View style={styles.searchRow}>
-          <View style={styles.searchContainer}>
-            <Icon name="search" size={20} color="#777" />
-            <TextInput
-              style={styles.searchInput}
-              placeholder="Search by IMEI or model"
-              placeholderTextColor="#999"
-              value={searchQuery}
-              onChangeText={setSearchQuery}
-            />
-            {searchQuery.length > 0 && (
-              <TouchableOpacity onPress={() => setSearchQuery("")}>
-                <Icon name="close" size={20} color="#777" />
-              </TouchableOpacity>
-            )}
-          </View>
-          <TouchableOpacity
-            style={styles.refreshButton}
-            onPress={refreshData}
-          >
-            <Icon name="refresh" size={24} color="#FFF" />
-          </TouchableOpacity>
-        </View>
-      </View>
-      <View style={styles.filtersContainer}>
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.filtersScroll}
+      </HeaderBackground>
+
+      <View style={styles.cameraContainer}>
+        <CameraView
+          style={styles.camera}
+          facing="back"
+          onBarcodeScanned={scanning ? handleBarcodeScanned : undefined}
+          barcodeScannerSettings={{ barcodeTypes: ["qr"] }}
         >
-          {renderFilterButton(
-            "all",
-            `All (${getCountByStatus("all")})`,
-            "list"
-          )}
-          {renderFilterButton(
-            "in_stock",
-            `In Stock (${getCountByStatus("in_stock")})`,
-            "inventory-2"
-          )}
-          {renderFilterButton(
-            "sold",
-            `Sold (${getCountByStatus("sold")})`,
-            "person"
-          )}
-          {renderFilterButton(
-            "with_retailer",
-            `With Retailer (${getCountByStatus("with_retailer")})`,
-            "store"
-          )}
-        </ScrollView>
-      </View>
-      {isLoading ? (
-        <View style={styles.loaderContainer}>
-          <ActivityIndicator size="large" color="#0066CC" />
-          <Text style={styles.loadingText}>Loading inventory...</Text>
-        </View>
-      ) : (
-        <FlatList
-          data={filteredPhones}
-          keyExtractor={(item) => item.id}
-          renderItem={renderPhoneItem}
-          contentContainerStyle={styles.phonesList}
-          ListEmptyComponent={
-            <View style={styles.emptyContainer}>
-              <Icon name="inventory" size={64} color="#DDD" />
-              <Text style={styles.emptyText}>No phones found</Text>
-              <Text style={styles.emptySubtext}>
-                {searchQuery
-                  ? "Try a different search term"
-                  : "Add a phone to get started"}
-              </Text>
-              {searchQuery && (
-                <TouchableOpacity
-                  style={styles.resetButton}
-                  onPress={() => setSearchQuery("")}
-                >
-                  <Text style={styles.resetButtonText}>Clear Search</Text>
-                </TouchableOpacity>
-              )}
+          <View style={styles.overlay}>
+            <View style={styles.scanAreaFrame}>
+              <View style={styles.scanCorner} />
+              <View style={[styles.scanCorner, styles.topRight]} />
+              <View style={[styles.scanCorner, styles.bottomLeft]} />
+              <View style={[styles.scanCorner, styles.bottomRight]} />
             </View>
-          }
-        />
+            <View style={styles.scanInstructionContainer}>
+              <Text style={styles.scanInstructionText}>
+                Align QR code within frame
+              </Text>
+            </View>
+          </View>
+        </CameraView>
+      </View>
+
+      {/* Loading Indicator */}
+      {loading && (
+        <View style={styles.loadingOverlay}>
+          <ActivityIndicator size="large" color="#FFFFFF" />
+        </View>
       )}
-      
-      {/* Logout Modal */}
+
+      {/* Phone Modal */}
       <Modal
-        visible={isLogoutModalVisible}
-        animationType="slide"
         transparent={true}
-        onRequestClose={() => setIsLogoutModalVisible(false)}
+        visible={showModal}
+        animationType="slide"
+        onRequestClose={resetScan}
       >
-        <KeyboardAvoidingView
-          behavior={Platform.OS === "ios" ? "padding" : "height"}
-          style={styles.modalContainer}
-        >
-          <View style={styles.modalContent}>
+        <View style={styles.modalBackground}>
+          <View style={styles.phoneModal}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Logout</Text>
-              <TouchableOpacity
-                style={styles.closeButton}
-                onPress={() => setIsLogoutModalVisible(false)}
-              >
+              <Text style={styles.modalTitle}>
+                {phoneExists ? "Update Phone" : "Add New Phone"}
+              </Text>
+              <TouchableOpacity onPress={resetScan}>
                 <Icon name="close" size={24} color="#555" />
               </TouchableOpacity>
             </View>
-            <View style={styles.logoutModalContent}>
-              <Text style={styles.logoutMessage}>
-                Are you sure you want to logout?
-              </Text>
-              <View style={styles.logoutButtonsContainer}>
-                <TouchableOpacity
-                  style={styles.cancelButton}
-                  onPress={() => setIsLogoutModalVisible(false)}
-                >
-                  <Text style={styles.cancelButtonText}>Cancel</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={styles.logoutButton}
-                  onPress={handleLogout}
-                >
-                  <Text style={styles.logoutButtonText}>Logout</Text>
-                </TouchableOpacity>
+
+            <View style={styles.modalContent}>
+              <View style={styles.imeiContainer}>
+                <Icon name="smartphone" size={20} color="#0066CC" />
+                <Text style={styles.imeiLabel}>IMEI:</Text>
+                <Text style={styles.imeiValue}>{scannedImei}</Text>
+              </View>
+
+              <Text style={styles.inputLabel}>Model</Text>
+              <TextInput
+                style={styles.input}
+                placeholder="Phone Model"
+                value={phoneModel}
+                onChangeText={setPhoneModel}
+                editable={!phoneExists}
+              />
+
+              <Text style={styles.inputLabel}>Status</Text>
+              <View style={styles.statusSelector}>
+                {[
+                  { value: "in_stock", label: "In Stock" },
+                  { value: "sold", label: "Sold" },
+                  { value: "with_retailer", label: "With Retailer" },
+                ].map((status) => (
+                  <TouchableOpacity
+                    key={status.value}
+                    style={[
+                      styles.statusOption,
+                      phoneStatus === status.value &&
+                        styles.statusOptionSelected,
+                    ]}
+                    onPress={() =>
+                      setPhoneStatus(
+                        status.value as "in_stock" | "sold" | "with_retailer"
+                      )
+                    }
+                  >
+                    <Text
+                      style={[
+                        styles.statusText,
+                        phoneStatus === status.value &&
+                          styles.statusTextSelected,
+                      ]}
+                    >
+                      {status.label}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
               </View>
             </View>
+
+            {errorMessage && (
+              <View style={styles.errorContainer}>
+                <Icon name="error-outline" size={20} color="#FF6B6B" />
+                <Text style={styles.errorText}>{errorMessage}</Text>
+              </View>
+            )}
+
+            <View style={styles.modalActions}>
+              {phoneExists ? (
+                <>
+                  <TouchableOpacity
+                    style={styles.updateButton}
+                    onPress={handleUpdatePhone}
+                    disabled={loading}
+                  >
+                    <Text style={styles.actionButtonText}>Update</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.deleteButton}
+                    onPress={handleDeletePhone}
+                    disabled={loading}
+                  >
+                    <Text style={styles.actionButtonText}>Delete</Text>
+                  </TouchableOpacity>
+                </>
+              ) : (
+                <TouchableOpacity
+                  style={styles.addButton}
+                  onPress={handleAddPhone}
+                  disabled={loading}
+                >
+                  <Text style={styles.actionButtonText}>Add to Inventory</Text>
+                </TouchableOpacity>
+              )}
+              <TouchableOpacity
+                style={styles.cancelButton}
+                onPress={resetScan}
+                disabled={loading}
+              >
+                <Text style={styles.cancelButtonText}>Cancel</Text>
+              </TouchableOpacity>
+            </View>
           </View>
-        </KeyboardAvoidingView>
+        </View>
       </Modal>
     </SafeAreaView>
   );
 };
 
-// **Styles**
+// Styles
+const { width } = Dimensions.get("window");
+const scanAreaSize = width * 0.7;
+
 const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: "#F5F7FA",
   },
   topHeader: {
-    paddingTop: 40,
+    paddingTop: Platform.OS === "ios" ? 50 : 30,
     paddingBottom: 16,
-    borderBottomLeftRadius: 20,
-    borderBottomRightRadius: 20,
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.1,
     shadowRadius: 4,
     elevation: 5,
   },
-  subHeader: {
-    backgroundColor: "#FFF",
-    paddingVertical: 8,
-    paddingHorizontal: 20,
-  },
   headerContent: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
     paddingHorizontal: 20,
   },
   title: {
@@ -493,400 +444,256 @@ const styles = StyleSheet.create({
     color: "rgba(255,255,255,0.8)",
     marginTop: 2,
   },
-  avatarButton: {
-    width: 35,
-    height: 35,
-    borderRadius: 20,
+  cameraContainer: {
+    flex: 1,
+  },
+  camera: {
+    flex: 1,
+  },
+  loadingOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "rgba(0,0,0,0.7)",
     justifyContent: "center",
     alignItems: "center",
-    backgroundColor: "rgba(255,255,255,0.2)",
+    zIndex: 100,
   },
-  searchRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginBottom: 8,
-  },
-  searchContainer: {
+  overlay: {
     flex: 1,
-    flexDirection: "row",
+    backgroundColor: "rgba(0,0,0,0.6)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  scanAreaFrame: {
+    width: scanAreaSize,
+    height: scanAreaSize,
+    position: "relative",
+    borderWidth: 2,
+    borderColor: "rgba(76, 175, 80, 0.5)",
+    borderRadius: 12,
+  },
+  scanCorner: {
+    position: "absolute",
+    width: 20,
+    height: 20,
+    borderColor: "#4CAF50",
+    borderWidth: 3,
+    top: 0,
+    left: 0,
+    borderBottomWidth: 0,
+    borderRightWidth: 0,
+  },
+  topRight: {
+    right: 0,
+    left: undefined,
+    borderLeftWidth: 0,
+    borderRightWidth: 3,
+  },
+  bottomLeft: {
+    bottom: 0,
+    top: undefined,
+    borderTopWidth: 0,
+    borderBottomWidth: 3,
+  },
+  bottomRight: {
+    bottom: 0,
+    right: 0,
+    top: undefined,
+    left: undefined,
+    borderTopWidth: 0,
+    borderLeftWidth: 0,
+    borderRightWidth: 3,
+    borderBottomWidth: 3,
+  },
+  scanInstructionContainer: {
+    position: "absolute",
+    bottom: -70,
+    left: 0,
+    right: 0,
+    alignItems: "center",
+  },
+  scanInstructionText: {
+    color: "#FFF",
+    fontSize: 16,
+    fontWeight: "500",
+    backgroundColor: "rgba(0,0,0,0.6)",
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    borderRadius: 30,
+  },
+  permissionContainer: {
+    flex: 1,
+    justifyContent: "center",
     alignItems: "center",
     backgroundColor: "#F5F7FA",
-    borderRadius: 12,
-    paddingHorizontal: 12,
-    height: 48,
-    marginRight: 12,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 2,
-    elevation: 2,
+    padding: 20,
   },
-  searchInput: {
-    flex: 1,
+  permissionText: {
     fontSize: 16,
-    marginLeft: 10,
-    color: "#333",
+    color: "#555",
+    textAlign: "center",
+    marginVertical: 20,
   },
-  addButtonSmall: {
-    width: 48,
-    height: 48,
-    borderRadius: 12,
-    backgroundColor: "#4CAF50",
-    justifyContent: "center",
-    alignItems: "center",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.2,
-    shadowRadius: 2,
-    elevation: 3,
-  },
-  filtersContainer: {
-    backgroundColor: "#FFF",
-    marginTop: 8,
-    marginHorizontal: 16,
-    borderRadius: 12,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 2,
-    elevation: 2,
-  },
-  filtersScroll: {
-    paddingHorizontal: 8,
+  permissionButton: {
+    backgroundColor: "#0066CC",
+    paddingHorizontal: 20,
     paddingVertical: 12,
-  },
-  filterButton: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 8,
-    paddingVertical: 8,
-    marginHorizontal: 4,
     borderRadius: 10,
   },
-  filterButtonActive: {
-    backgroundColor: "#BBDEFB",
-  },
-  filterIconWrapper: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    justifyContent: "center",
-    alignItems: "center",
-    backgroundColor: "#F0F0F0",
-    marginRight: 6,
-  },
-  filterIconWrapperActive: {
-    backgroundColor: "#0066CC",
-  },
-  filterText: {
-    fontSize: 12,
-    color: "#555",
-    fontWeight: "500",
-  },
-  filterTextActive: {
-    color: "#004080",
-    fontWeight: "bold",
-  },
-  loaderContainer: {
-    flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  loadingText: {
-    marginTop: 12,
-    fontSize: 16,
-    color: "#666",
-  },
-  phonesList: {
-    padding: 16,
-    paddingBottom: 100,
-  },
-  refreshButton: {
-    width: 48,
-    height: 48,
-    borderRadius: 12,
-    backgroundColor: "#0066CC",
-    justifyContent: "center",
-    alignItems: "center",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.2,
-    shadowRadius: 2,
-    elevation: 3,
-  },
-  phoneItem: {
-    backgroundColor: "#FFF",
-    borderRadius: 12,
-    marginBottom: 12,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 2,
-    elevation: 2,
-    overflow: "hidden",
-  },
-  phoneItemInner: {
-    flexDirection: "row",
-    padding: 12,
-  },
-  phoneIconWrapper: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: "#EEF2FF",
-    justifyContent: "center",
-    alignItems: "center",
-    marginRight: 12,
-  },
-  phoneContent: {
-    flex: 1,
-  },
-  phoneHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: 8,
-  },
-  phoneModel: {
-    fontSize: 16,
-    fontWeight: "bold",
-    color: "#333",
-  },
-  statusBadge: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 12,
-  },
-  statusIcon: {
-    marginRight: 4,
-  },
-  statusText: {
-    fontSize: 12,
+  permissionButtonText: {
     color: "#FFF",
+    fontSize: 16,
     fontWeight: "500",
   },
-  imeiContainer: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "#F5F7FA",
-    paddingHorizontal: 8,
-    paddingVertical: 6,
-    borderRadius: 6,
-    marginBottom: 8,
-  },
-  imeiText: {
-    fontSize: 14,
-    marginLeft: 6,
-    color: "#555",
-    fontWeight: "500",
-  },
-  phoneFooter: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    marginTop: 8,
-    paddingTop: 8,
-    borderTopWidth: 1,
-    borderTopColor: "#F0F0F0",
-  },
-  dateContainer: {
-    flexDirection: "row",
-    alignItems: "center",
-  },
-  dateText: {
-    fontSize: 12,
-    color: "#888",
-    marginLeft: 4,
-  },
-  emptyContainer: {
-    alignItems: "center",
-    justifyContent: "center",
-    padding: 40,
-    backgroundColor: "#FFF",
-    borderRadius: 12,
-    marginTop: 20,
-  },
-  emptyText: {
-    fontSize: 18,
-    fontWeight: "500",
-    color: "#666",
-    marginTop: 16,
-  },
-  emptySubtext: {
-    fontSize: 14,
-    color: "#888",
-    marginTop: 8,
-    textAlign: "center",
-  },
-  resetButton: {
-    marginTop: 16,
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    backgroundColor: "#EEF2FF",
-    borderRadius: 8,
-  },
-  resetButtonText: {
-    fontSize: 14,
-    color: "#0066CC",
-    fontWeight: "500",
-  },
-  modalContainer: {
+  modalBackground: {
     flex: 1,
-    justifyContent: "flex-end",
-    backgroundColor: "rgba(0,0,0,0.5)",
+    backgroundColor: "rgba(0,0,0,0.6)",
+    justifyContent: "center",
+    alignItems: "center",
   },
-  modalContent: {
+  phoneModal: {
     backgroundColor: "#FFF",
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    paddingTop: 16,
-    maxHeight: "90%",
+    borderRadius: 16,
+    padding: 24,
+    width: "80%",
+    alignItems: "center",
   },
   modalHeader: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    paddingHorizontal: 20,
+    width: "100%",
     paddingBottom: 16,
     borderBottomWidth: 1,
     borderBottomColor: "#EEE",
+    marginBottom: 16,
   },
   modalTitle: {
     fontSize: 18,
     fontWeight: "bold",
-    color: "#333",
   },
-  closeButton: {
-    padding: 4,
+  modalContent: {
+    width: "100%",
+    marginBottom: 16,
   },
-  formContainer: {
-    padding: 20,
-  },
-  inputContainer: {
+  imeiContainer: {
+    flexDirection: "row",
+    alignItems: "center",
     marginBottom: 20,
+    padding: 10,
+    backgroundColor: "#F5F7FA",
+    borderRadius: 8,
+  },
+  imeiLabel: {
+    fontSize: 16,
+    fontWeight: "500",
+    color: "#333",
+    marginLeft: 8,
+  },
+  imeiValue: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: "#0066CC",
+    marginLeft: 8,
   },
   inputLabel: {
     fontSize: 14,
     fontWeight: "500",
     color: "#555",
-    marginBottom: 8,
+    marginBottom: 6,
+    alignSelf: "flex-start",
   },
-  textInputWrapper: {
-    flexDirection: "row",
-    alignItems: "center",
+  input: {
     borderWidth: 1,
     borderColor: "#DDD",
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    height: 52,
-  },
-  inputIcon: {
-    marginRight: 10,
-  },
-  modalInput: {
-    flex: 1,
-    fontSize: 16,
-    color: "#333",
-  },
-  imeiInput: {
-    flex: 1,
-  },
-  pickerWrapper: {
-    borderWidth: 1,
-    borderColor: "#DDD",
-    borderRadius: 10,
-    overflow: "hidden",
-    marginTop: 8,
-  },
-  picker: {
-    height: 52,
+    borderRadius: 8,
+    padding: 12,
     width: "100%",
+    marginBottom: 16,
+    fontSize: 16,
   },
-  statusSelectorContainer: {
+  statusSelector: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    width: "100%",
     marginBottom: 20,
   },
-  statusButtonsRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-  },
-  statusSelectButton: {
+  statusOption: {
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 20,
     borderWidth: 1,
     borderColor: "#DDD",
-    borderRadius: 10,
-    padding: 10,
-    flex: 1,
-    marginHorizontal: 5,
-    alignItems: "center",
+    backgroundColor: "#F5F5F5",
   },
-  statusSelectIcon: {
-    marginBottom: 6,
+  statusOptionSelected: {
+    backgroundColor: "#E3F2FD",
+    borderColor: "#0066CC",
   },
-  statusSelectText: {
-    fontSize: 12,
+  statusText: {
+    fontSize: 14,
     color: "#555",
   },
-  formButtonsContainer: {
+  statusTextSelected: {
+    color: "#0066CC",
+    fontWeight: "500",
+  },
+  errorContainer: {
     flexDirection: "row",
-    justifyContent: "space-between",
-    marginTop: 10,
+    alignItems: "center",
+    backgroundColor: "#FFEBEE",
+    padding: 10,
+    borderRadius: 8,
+    marginBottom: 16,
+    width: "100%",
+  },
+  errorText: {
+    color: "#D32F2F",
+    fontSize: 14,
+    marginLeft: 8,
+  },
+  modalActions: {
+    width: "100%",
+  },
+  addButton: {
+    backgroundColor: "#4CAF50",
+    padding: 14,
+    borderRadius: 8,
+    width: "100%",
+    alignItems: "center",
+    marginBottom: 8,
+  },
+  updateButton: {
+    backgroundColor: "#0066CC",
+    padding: 14,
+    borderRadius: 8,
+    width: "100%",
+    alignItems: "center",
+    marginBottom: 8,
+  },
+  deleteButton: {
+    backgroundColor: "#FF5252",
+    padding: 14,
+    borderRadius: 8,
+    width: "100%",
+    alignItems: "center",
+    marginBottom: 8,
+  },
+  actionButtonText: {
+    color: "#FFF",
+    fontSize: 16,
+    fontWeight: "600",
   },
   cancelButton: {
     backgroundColor: "#F5F5F5",
-    borderRadius: 10,
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    flex: 1,
-    marginRight: 8,
+    padding: 14,
+    borderRadius: 8,
+    width: "100%",
     alignItems: "center",
   },
   cancelButtonText: {
+    color: "#555",
     fontSize: 16,
-    color: "#666",
-    fontWeight: "500",
-  },
-  submitButton: {
-    backgroundColor: "#0066CC",
-    borderRadius: 10,
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    flex: 1,
-    marginLeft: 8,
-    alignItems: "center",
-  },
-  submitButtonText: {
-    fontSize: 16,
-    color: "#FFF",
-    fontWeight: "500",
-  },
-  logoutModalContent: {
-    padding: 20,
-    alignItems: "center",
-  },
-  logoutMessage: {
-    fontSize: 16,
-    color: "#333",
-    marginBottom: 20,
-  },
-  logoutButtonsContainer: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    width: "100%",
-  },
-  logoutButton: {
-    backgroundColor: "#FF5252",
-    borderRadius: 10,
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    flex: 1,
-    marginLeft: 8,
-    alignItems: "center",
-  },
-  logoutButtonText: {
-    fontSize: 16,
-    color: "#FFF",
-    fontWeight: "500",
   },
 });
 
-export default HomePage;
+export default BarcodeScannerPage;
