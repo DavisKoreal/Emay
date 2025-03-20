@@ -18,7 +18,7 @@ import {
 import Icon from "react-native-vector-icons/MaterialIcons";
 import { useRouter } from "expo-router";
 import { AuthContext } from "../../context/AuthContext"; // Adjust path
-import { getDoc, doc, collection, getDocs, setDoc } from "firebase/firestore";
+import { getDoc, doc, collection, getDocs, setDoc, deleteDoc } from "firebase/firestore";
 import { firestore } from "../../config/firebase"; // Adjust path to your Firebase config
 import { Picker } from "@react-native-picker/picker";
 import { StatusBar } from "expo-status-bar";
@@ -101,6 +101,10 @@ const HomePage = () => {
   const [editPhoneModel, setEditPhoneModel] = useState("");
   const [editPhoneImei, setEditPhoneImei] = useState("");
   const [editPhoneStatus, setEditPhoneStatus] = useState("in_stock");
+  const [isEditing, setIsEditing] = useState(false);
+  const [deleteConfirmVisible, setDeleteConfirmVisible] = useState(false);
+  const [editRetailerName, setEditRetailerName] = useState('');
+  const [editRetailerContact, setEditRetailerContact] = useState('');
 
   // **Effect for Fetching Inventory from Firestore**
   useEffect(() => {
@@ -205,6 +209,34 @@ const HomePage = () => {
     });
   };
 
+  const handleDeletePhone = async (phoneId: string) => {
+    if (!storeData || !storeData.phoneNumber) {
+      Alert.alert("Error", "Store data not available");
+      return;
+    }
+  
+    setIsLoading(true);
+  
+    try {
+      const phoneRef = doc(
+        firestore,
+        "stores",
+        storeData.phoneNumber,
+        "inventory",
+        phoneId
+      );
+      await deleteDoc(phoneRef);
+      await refreshData();
+      setDetailsModalVisible(false);
+      Alert.alert("Success", "Phone deleted successfully");
+    } catch (error) {
+      console.error("Error deleting phone:", error);
+      Alert.alert("Error", "Failed to delete phone");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const handleAddPhone = async () => {
     // Validate IMEI
     if (!newPhoneImei || newPhoneImei.length < 15 || newPhoneImei.length > 17) {
@@ -219,32 +251,40 @@ const HomePage = () => {
     }
   
     // Check if retailer/buyer name and contact are required but not provided
-    if ((newPhoneStatus === "sold" || newPhoneStatus === "with_retailer") && 
-        (!retailerName || !retailerContact)) {
+    if (
+      (newPhoneStatus === "sold" || newPhoneStatus === "with_retailer") &&
+      (!retailerName || !retailerContact)
+    ) {
       Alert.alert("Error", "Please enter name and contact information");
       return;
     }
   
     setIsLoading(true);
-    
+  
     try {
       if (storeData && storeData.phoneNumber) {
-        const newPhoneRef = doc(
-          collection(firestore, "stores", storeData.phoneNumber, "inventory")
+        // Define the inventory collection reference
+        const inventoryRef = collection(
+          firestore,
+          "stores",
+          storeData.phoneNumber,
+          "inventory"
         );
-        
+        // Use IMEI as the document ID
+        const newPhoneRef = doc(inventoryRef, newPhoneImei);
+  
+        // Add the phone data without including imei as a field (since it’s the ID)
         await setDoc(newPhoneRef, {
           model: newPhoneModel,
-          imei: newPhoneImei,
           status: newPhoneStatus,
           dateUpdated: selectedDate || new Date(),
           retailerName: retailerName || null,
-          retailerContact: retailerContact || null
+          retailerContact: retailerContact || null,
         });
   
         // Refresh the phone list
         await refreshData();
-        
+  
         // Reset form and close modal
         setNewPhoneModel("");
         setNewPhoneImei("");
@@ -253,7 +293,7 @@ const HomePage = () => {
         setRetailerContact("");
         setSelectedDate(new Date());
         setModalVisible(false);
-        
+  
         Alert.alert("Success", "Phone added successfully");
       }
     } catch (error) {
@@ -279,6 +319,8 @@ const HomePage = () => {
           setEditPhoneImei(item.imei);
           setEditPhoneStatus(item.status);
           setDetailsModalVisible(true);
+          setEditRetailerName(item.retailerName || ''); // Add this
+          setEditRetailerContact(item.retailerContact || ''); 
         }}
       >
         <View style={styles.phoneItemInner}>
@@ -330,8 +372,8 @@ const HomePage = () => {
   };
 
   const handleUpdatePhone = async (phoneId: string) => {
-    if (!editPhoneModel || !editPhoneImei) {
-      Alert.alert("Error", "Phone model and IMEI cannot be empty");
+    if (!editPhoneModel) {
+      Alert.alert("Error", "Phone model cannot be empty");
       return;
     }
   
@@ -340,24 +382,25 @@ const HomePage = () => {
     try {
       if (storeData && storeData.phoneNumber) {
         const phoneRef = doc(
-          firestore, 
-          "stores", 
-          storeData.phoneNumber, 
-          "inventory", 
-          phoneId
+          firestore,
+          "stores",
+          storeData.phoneNumber,
+          "inventory",
+          phoneId // phoneId is the IMEI
         );
-        
-        // Only update editable fields
-        await setDoc(phoneRef, {
-          model: editPhoneModel,
-          imei: editPhoneImei,
-          status: editPhoneStatus,
-          // Keep existing data for other fields
-          dateUpdated: selectedPhone?.dateUpdated,
-          retailerName: selectedPhone?.retailerName,
-          retailerContact: selectedPhone?.retailerContact
-        }, { merge: true });
-        
+  
+        await setDoc(
+          phoneRef,
+          {
+            model: editPhoneModel,
+            status: editPhoneStatus,
+            dateUpdated: selectedDate || new Date(),
+            retailerName: editRetailerName || null,
+            retailerContact: editRetailerContact || null,
+          },
+          { merge: true }
+        );
+  
         await refreshData();
         setDetailsModalVisible(false);
         Alert.alert("Success", "Phone details updated");
@@ -414,18 +457,18 @@ const HomePage = () => {
           "inventory"
         );
         const querySnapshot = await getDocs(inventoryRef);
-        const inventoryData = querySnapshot.docs
-          .map((doc) => {
-            const data = doc.data();
-            return {
-              id: doc.id,
-              ...data,
-              dateUpdated: data.dateUpdated
-                ? data.dateUpdated.toDate()
-                : new Date(),
-            } as Phone;
-          })
-          .filter((phone) => phone.imei);
+        const inventoryData = querySnapshot.docs.map((doc) => {
+          const data = doc.data();
+          return {
+            id: doc.id, // This is the IMEI
+            imei: doc.id, // Set imei to the document ID
+            model: data.model,
+            status: data.status,
+            dateUpdated: data.dateUpdated ? data.dateUpdated.toDate() : new Date(),
+            retailerName: data.retailerName || undefined,
+            retailerContact: data.retailerContact || undefined,
+          } as Phone;
+        });
         setPhones(inventoryData);
         setFilteredPhones(inventoryData);
       } catch (error) {
@@ -573,124 +616,291 @@ const HomePage = () => {
             
             {selectedPhone && (
               <ScrollView style={styles.formContainer}>
-                {/* Phone Model (Editable) */}
-                <View style={styles.inputContainer}>
-                  <Text style={styles.inputLabel}>Phone Model</Text>
-                  <View style={styles.textInputWrapper}>
-                    <Icon name="phone-iphone" size={20} color="#555" style={styles.inputIcon} />
-                    <TextInput
-                      style={styles.modalInput}
-                      value={editPhoneModel}
-                      onChangeText={setEditPhoneModel}
-                    />
-                  </View>
+                {/* Mode switcher - View/Edit */}
+                <View style={styles.modeSwitcherContainer}>
+                  <TouchableOpacity
+                    style={[
+                      styles.modeSwitcherButton,
+                      !isEditing && styles.modeSwitcherButtonActive
+                    ]}
+                    onPress={() => setIsEditing(false)}
+                  >
+                    <Icon name="visibility" size={18} color={!isEditing ? "#fff" : "#555"} />
+                    <Text style={[styles.modeSwitcherText, !isEditing && styles.modeSwitcherTextActive]}>View</Text>
+                  </TouchableOpacity>
+                  
+                  <TouchableOpacity
+                    style={[
+                      styles.modeSwitcherButton,
+                      isEditing && styles.modeSwitcherButtonActive
+                    ]}
+                    onPress={() => setIsEditing(true)}
+                  >
+                    <Icon name="edit" size={18} color={isEditing ? "#fff" : "#555"} />
+                    <Text style={[styles.modeSwitcherText, isEditing && styles.modeSwitcherTextActive]}>Edit</Text>
+                  </TouchableOpacity>
                 </View>
                 
-                {/* IMEI Number (Editable) */}
-                <View style={styles.inputContainer}>
-                  <Text style={styles.inputLabel}>IMEI Number</Text>
-                  <View style={styles.textInputWrapper}>
-                    <Icon name="fingerprint" size={20} color="#555" style={styles.inputIcon} />
-                    <TextInput
-                      style={styles.modalInput}
-                      value={editPhoneImei}
-                      onChangeText={setEditPhoneImei}
-                      keyboardType="number-pad"
-                      maxLength={17}
-                    />
-                  </View>
-                </View>
-                
-                {/* Status (Editable) */}
-                <View style={styles.statusSelectorContainer}>
-                  <Text style={styles.inputLabel}>Status</Text>
-                  <View style={styles.statusButtonsRow}>
-                    <TouchableOpacity
-                      style={[
-                        styles.statusSelectButton,
-                        editPhoneStatus === "in_stock" && { borderColor: "#4CAF50", backgroundColor: "#E8F5E9" }
-                      ]}
-                      onPress={() => setEditPhoneStatus("in_stock")}
-                    >
-                      <Icon
-                        name="inventory-2"
-                        size={24}
-                        color={editPhoneStatus === "in_stock" ? "#4CAF50" : "#AAA"}
-                        style={styles.statusSelectIcon}
-                      />
-                      <Text style={styles.statusSelectText}>In Stock</Text>
-                    </TouchableOpacity>
-                    
-                    <TouchableOpacity
-                      style={[
-                        styles.statusSelectButton,
-                        editPhoneStatus === "sold" && { borderColor: "#2196F3", backgroundColor: "#E3F2FD" }
-                      ]}
-                      onPress={() => setEditPhoneStatus("sold")}
-                    >
-                      <Icon
-                        name="person"
-                        size={24}
-                        color={editPhoneStatus === "sold" ? "#2196F3" : "#AAA"}
-                        style={styles.statusSelectIcon}
-                      />
-                      <Text style={styles.statusSelectText}>Sold</Text>
-                    </TouchableOpacity>
-                    
-                    <TouchableOpacity
-                      style={[
-                        styles.statusSelectButton,
-                        editPhoneStatus === "with_retailer" && { borderColor: "#FF9800", backgroundColor: "#FFF3E0" }
-                      ]}
-                      onPress={() => setEditPhoneStatus("with_retailer")}
-                    >
-                      <Icon
-                        name="store"
-                        size={24}
-                        color={editPhoneStatus === "with_retailer" ? "#FF9800" : "#AAA"}
-                        style={styles.statusSelectIcon}
-                      />
-                      <Text style={styles.statusSelectText}>With Retailer</Text>
-                    </TouchableOpacity>
-                  </View>
-                </View>
-                
-                {/* Retailer/Buyer Info (Non-Editable, Conditional) */}
-                {selectedPhone.status !== "in_stock" && (editPhoneStatus !== "in_stock") && (
-                  <>
-                    <View style={styles.infoContainer}>
-                      <Text style={styles.infoLabel}>
-                        {selectedPhone.status === "sold" ? "Buyer" : "Retailer"}:
-                      </Text>
-                      <Text style={styles.infoValue}>{selectedPhone.retailerName || "N/A"}</Text>
+                {/* Display Mode */}
+                {!isEditing ? (
+                  <View style={styles.detailsContainer}>
+                    {/* Phone Model */}
+                    <View style={styles.detailItem}>
+                      <Icon name="phone-iphone" size={24} color="#555" />
+                      <View style={styles.detailContent}>
+                        <Text style={styles.detailLabel}>Phone Model</Text>
+                        <Text style={styles.detailValue}>{selectedPhone.model}</Text>
+                      </View>
                     </View>
                     
-                    <View style={styles.infoContainer}>
-                      <Text style={styles.infoLabel}>Contact:</Text>
-                      <Text style={styles.infoValue}>{selectedPhone.retailerContact || "N/A"}</Text>
+                    {/* IMEI */}
+                    <View style={styles.detailItem}>
+                      <Icon name="fingerprint" size={24} color="#555" />
+                      <View style={styles.detailContent}>
+                        <Text style={styles.detailLabel}>IMEI Number</Text>
+                        <Text style={styles.detailValue}>{selectedPhone.imei}</Text>
+                      </View>
                     </View>
-                  </>
+                    
+                    {/* Status */}
+                    <View style={styles.detailItem}>
+                      <Icon 
+                        name={
+                          selectedPhone.status === "in_stock" ? "inventory-2" : 
+                          selectedPhone.status === "sold" ? "person" : "store"
+                        } 
+                        size={24} 
+                        color={
+                          selectedPhone.status === "in_stock" ? "#4CAF50" : 
+                          selectedPhone.status === "sold" ? "#2196F3" : "#FF9800"
+                        } 
+                      />
+                      <View style={styles.detailContent}>
+                        <Text style={styles.detailLabel}>Status</Text>
+                        <Text style={styles.detailValue}>
+                          {selectedPhone.status === "in_stock" ? "In Stock" : 
+                          selectedPhone.status === "sold" ? "Sold" : "With Retailer"}
+                        </Text>
+                      </View>
+                    </View>
+                    
+                    {/* Retailer/Buyer Info (Conditional) */}
+                    {selectedPhone.status !== "in_stock" && (
+                      <>
+                        <View style={styles.detailItem}>
+                          <Icon name="person" size={24} color="#555" />
+                          <View style={styles.detailContent}>
+                            <Text style={styles.detailLabel}>
+                              {selectedPhone.status === "sold" ? "Buyer" : "Retailer"}
+                            </Text>
+                            <Text style={styles.detailValue}>{selectedPhone.retailerName || "N/A"}</Text>
+                          </View>
+                        </View>
+                        
+                        <View style={styles.detailItem}>
+                          <Icon name="call" size={24} color="#555" />
+                          <View style={styles.detailContent}>
+                            <Text style={styles.detailLabel}>Contact</Text>
+                            <Text style={styles.detailValue}>{selectedPhone.retailerContact || "N/A"}</Text>
+                          </View>
+                        </View>
+                      </>
+                    )}
+                    
+                    {/* Date */}
+                    <View style={styles.detailItem}>
+                      <Icon name="calendar-today" size={24} color="#555" />
+                      <View style={styles.detailContent}>
+                        <Text style={styles.detailLabel}>{getDateLabel(selectedPhone.status)}</Text>
+                        <Text style={styles.detailValue}>{formatDate(selectedPhone.dateUpdated)}</Text>
+                      </View>
+                    </View>
+                    
+                    {/* Action Buttons */}
+                    <View style={styles.actionButtonsContainer}>
+                      <TouchableOpacity
+                        style={styles.deleteButton}
+                        onPress={() => setDeleteConfirmVisible(true)}
+                      >
+                        <Icon name="delete" size={18} color="#fff" />
+                        <Text style={styles.actionButtonText}>Delete</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                ) : (
+                  /* Edit Mode */
+                  <View style={styles.editContainer}>
+                    {/* Phone Model (Editable) */}
+                    <View style={styles.inputContainer}>
+                      <Text style={styles.inputLabel}>Phone Model</Text>
+                      <View style={styles.textInputWrapper}>
+                        <Icon name="phone-iphone" size={20} color="#555" style={styles.inputIcon} />
+                        <TextInput
+                          style={styles.modalInput}
+                          placeholderTextColor="#666"
+                          value={editPhoneModel}
+                          onChangeText={setEditPhoneModel}
+                        />
+                      </View>
+                    </View>
+                    
+                    {/* IMEI Number (Editable) */}
+                    <View style={styles.inputContainer}>
+                      <Text style={styles.inputLabel}>IMEI Number</Text>
+                      <View style={styles.textInputWrapper}>
+                        <Icon name="fingerprint" size={20} color="#555" style={styles.inputIcon} />
+                        <TextInput
+                          style={styles.modalInput}
+                          value={editPhoneImei}
+                          placeholderTextColor="#666"
+                          onChangeText={setEditPhoneImei}
+                          keyboardType="number-pad"
+                          maxLength={17}
+                        />
+                      </View>
+                    </View>
+                    
+                    {/* Status (Editable) */}
+                    <View style={styles.statusSelectorContainer}>
+                      <Text style={styles.inputLabel}>Status</Text>
+                      <View style={styles.statusButtonsRow}>
+                        <TouchableOpacity
+                          style={[
+                            styles.statusSelectButton,
+                            editPhoneStatus === "in_stock" && { borderColor: "#4CAF50", backgroundColor: "#E8F5E9" }
+                          ]}
+                          onPress={() => setEditPhoneStatus("in_stock")}
+                        >
+                          <Icon
+                            name="inventory-2"
+                            size={24}
+                            color={editPhoneStatus === "in_stock" ? "#4CAF50" : "#AAA"}
+                            style={styles.statusSelectIcon}
+                          />
+                          <Text style={styles.statusSelectText}>In Stock</Text>
+                        </TouchableOpacity>
+                        
+                        <TouchableOpacity
+                          style={[
+                            styles.statusSelectButton,
+                            editPhoneStatus === "sold" && { borderColor: "#2196F3", backgroundColor: "#E3F2FD" }
+                          ]}
+                          onPress={() => setEditPhoneStatus("sold")}
+                        >
+                          <Icon
+                            name="person"
+                            size={24}
+                            color={editPhoneStatus === "sold" ? "#2196F3" : "#AAA"}
+                            style={styles.statusSelectIcon}
+                          />
+                          <Text style={styles.statusSelectText}>Sold</Text>
+                        </TouchableOpacity>
+                        
+                        <TouchableOpacity
+                          style={[
+                            styles.statusSelectButton,
+                            editPhoneStatus === "with_retailer" && { borderColor: "#FF9800", backgroundColor: "#FFF3E0" }
+                          ]}
+                          onPress={() => setEditPhoneStatus("with_retailer")}
+                        >
+                          <Icon
+                            name="store"
+                            size={24}
+                            color={editPhoneStatus === "with_retailer" ? "#FF9800" : "#AAA"}
+                            style={styles.statusSelectIcon}
+                          />
+                          <Text style={styles.statusSelectText}>With Retailer</Text>
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+                    
+                    {/* Retailer/Buyer Info (Conditional & Editable) */}
+                    {editPhoneStatus !== "in_stock" && (
+                      <>
+                        <View style={styles.inputContainer}>
+                          <Text style={styles.inputLabel}>
+                            {editPhoneStatus === "sold" ? "Buyer Name" : "Retailer Name"}
+                          </Text>
+                          <View style={styles.textInputWrapper}>
+                            <Icon name="person" size={20} color="#555" style={styles.inputIcon} />
+                            <TextInput
+                              style={styles.modalInput}
+                              placeholderTextColor="#666"
+                              value={editRetailerName}
+                              onChangeText={setEditRetailerName}
+                              placeholder={editPhoneStatus === "sold" ? "Enter buyer name" : "Enter retailer name"}
+                            />
+                          </View>
+                        </View>
+                        
+                        <View style={styles.inputContainer}>
+                          <Text style={styles.inputLabel}>Contact Number</Text>
+                          <View style={styles.textInputWrapper}>
+                            <Icon name="call" size={20} color="#555" style={styles.inputIcon} />
+                            <TextInput
+                              style={styles.modalInput}
+                              value={editRetailerContact}
+                              placeholderTextColor="#666"
+                              onChangeText={setEditRetailerContact}
+                              keyboardType="phone-pad"
+                              placeholder="Enter contact number"
+                            />
+                          </View>
+                        </View>
+                      </>
+                    )}
+                    
+                    {/* Save Button */}
+                    <TouchableOpacity
+                      style={styles.saveButton}
+                      onPress={() => handleUpdatePhone(selectedPhone.id)}
+                    >
+                      <Icon name="save" size={18} color="#fff" />
+                      <Text style={styles.saveButtonText}>Save Changes</Text>
+                    </TouchableOpacity>
+                  </View>
                 )}
-                
-                {/* Date (Non-Editable) */}
-                <View style={styles.infoContainer}>
-                  <Text style={styles.infoLabel}>
-                    {getDateLabel(selectedPhone.status)}:
-                  </Text>
-                  <Text style={styles.infoValue}>{formatDate(selectedPhone.dateUpdated)}</Text>
-                </View>
-                
-                {/* Update Button */}
-                <TouchableOpacity
-                  style={styles.updateButton}
-                  onPress={() => handleUpdatePhone(selectedPhone.id)}
-                >
-                  <Text style={styles.updateButtonText}>Update</Text>
-                </TouchableOpacity>
               </ScrollView>
             )}
           </View>
         </KeyboardAvoidingView>
+      </Modal>
+
+      {/* Delete Confirmation Modal */}
+      <Modal
+        visible={deleteConfirmVisible}
+        animationType="fade"
+        transparent={true}
+        onRequestClose={() => setDeleteConfirmVisible(false)}
+      >
+        <View style={styles.confirmModalContainer}>
+          <View style={styles.confirmModalContent}>
+            <Icon name="warning" size={40} color="#FF9800" />
+            <Text style={styles.confirmModalTitle}>Confirm Delete</Text>
+            <Text style={styles.confirmModalText}>
+              Are you sure you want to delete this phone record? This action cannot be undone.
+            </Text>
+            <View style={styles.confirmModalButtons}>
+              <TouchableOpacity
+                style={styles.cancelButton}
+                onPress={() => setDeleteConfirmVisible(false)}
+              >
+                <Text style={styles.cancelButtonText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.confirmDeleteButton}
+                onPress={() => {
+                  if (selectedPhone) {
+                    handleDeletePhone(selectedPhone.id);
+                  }
+                  setDeleteConfirmVisible(false);
+                }}
+              >
+                <Text style={styles.confirmDeleteButtonText}>Delete</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
       </Modal>
       {/* Add Phone Modal */}
       <Modal
@@ -713,7 +923,8 @@ const HomePage = () => {
                 <Icon name="close" size={24} color="#555" />
               </TouchableOpacity>
             </View>
-            <View style={styles.formContainer}>
+            {/* Change from View to ScrollView */}
+            <ScrollView style={styles.formContainer}>
               {/* Phone Model Picker */}
               <View style={styles.inputContainer}>
                 <Text style={styles.inputLabel}>Phone Model</Text>
@@ -722,6 +933,7 @@ const HomePage = () => {
                   <TextInput
                     style={styles.modalInput}
                     placeholder="Enter phone model"
+                    placeholderTextColor="#666"
                     value={newPhoneModel}
                     onChangeText={setNewPhoneModel}
                   />
@@ -736,6 +948,7 @@ const HomePage = () => {
                   <TextInput
                     style={styles.modalInput}
                     placeholder="Enter IMEI number"
+                    placeholderTextColor="#666"
                     value={newPhoneImei}
                     onChangeText={setNewPhoneImei}
                     keyboardType="number-pad"
@@ -763,7 +976,6 @@ const HomePage = () => {
                     />
                     <Text style={styles.statusSelectText}>In Stock</Text>
                   </TouchableOpacity>
-                  
                   <TouchableOpacity
                     style={[
                       styles.statusSelectButton,
@@ -779,7 +991,6 @@ const HomePage = () => {
                     />
                     <Text style={styles.statusSelectText}>Sold</Text>
                   </TouchableOpacity>
-                  
                   <TouchableOpacity
                     style={[
                       styles.statusSelectButton,
@@ -814,13 +1025,13 @@ const HomePage = () => {
                       />
                       <TextInput
                         style={styles.modalInput}
+                        placeholderTextColor="#666"
                         placeholder={newPhoneStatus === "sold" ? "Enter buyer name" : "Enter retailer name"}
                         value={retailerName}
                         onChangeText={setRetailerName}
                       />
                     </View>
                   </View>
-                  
                   <View style={styles.inputContainer}>
                     <Text style={styles.inputLabel}>
                       {newPhoneStatus === "sold" ? "Buyer Contact" : "Retailer Contact"}
@@ -835,6 +1046,7 @@ const HomePage = () => {
                       <TextInput
                         style={styles.modalInput}
                         placeholder="Enter contact number"
+                        placeholderTextColor="#666"
                         value={retailerContact}
                         onChangeText={setRetailerContact}
                         keyboardType="phone-pad"
@@ -857,13 +1069,13 @@ const HomePage = () => {
                 </TouchableOpacity>
                 {showDatePicker && (
                   <DateTimePicker
-                  value={selectedDate || new Date()}
-                  mode="date"
-                  display="default"
-                  onChange={(event: any, date?: Date | undefined) => {
-                    setShowDatePicker(false);
-                    if (date) setSelectedDate(date);
-                  }}
+                    value={selectedDate || new Date()}
+                    mode="date"
+                    display="default"
+                    onChange={(event: any, date?: Date | undefined) => {
+                      setShowDatePicker(false);
+                      if (date) setSelectedDate(date);
+                    }}
                   />
                 )}
               </View>
@@ -883,7 +1095,7 @@ const HomePage = () => {
                   <Text style={styles.submitButtonText}>Add Phone</Text>
                 </TouchableOpacity>
               </View>
-            </View>
+            </ScrollView>
           </View>
         </KeyboardAvoidingView>
       </Modal>
@@ -1420,7 +1632,162 @@ const styles = StyleSheet.create({
     color: "#333",
     flex: 1,
     paddingVertical: 12,
-  }
+  },
+  modeSwitcherContainer: {
+    flexDirection: 'row',
+    marginBottom: 16,
+    borderRadius: 8,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: '#ddd',
+    alignSelf: 'center',
+  },
+  modeSwitcherButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    width: 100,
+  },
+  modeSwitcherButtonActive: {
+    backgroundColor: '#5C6BC0',
+  },
+  modeSwitcherText: {
+    marginLeft: 6,
+    fontSize: 14,
+    color: '#555',
+  },
+  modeSwitcherTextActive: {
+    color: '#fff',
+  },
+  
+  // View mode styles
+  detailsContainer: {
+    marginTop: 8,
+  },
+  detailItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#eee',
+  },
+  detailContent: {
+    marginLeft: 12,
+    flex: 1,
+  },
+  detailLabel: {
+    fontSize: 12,
+    color: '#777',
+  },
+  detailValue: {
+    fontSize: 16,
+    color: '#333',
+    marginTop: 2,
+  },
+  actionButtonsContainer: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    marginTop: 24,
+    marginBottom: 8,
+  },
+  deleteButton: {
+    flexDirection: 'row',
+    backgroundColor: '#F44336',
+    paddingVertical: 10,
+    paddingHorizontal: 20,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.2,
+    shadowRadius: 1.5,
+    elevation: 2,
+  },
+  actionButtonText: {
+    color: 'white',
+    fontSize: 16,
+    fontWeight: '500',
+    marginLeft: 8,
+  },
+  
+  // Edit mode styles
+  editContainer: {
+    marginTop: 8,
+  },
+  saveButton: {
+    flexDirection: 'row',
+    backgroundColor: '#4CAF50',
+    paddingVertical: 12,
+    paddingHorizontal: 24,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 24,
+    marginBottom: 8,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.2,
+    shadowRadius: 1.5,
+    elevation: 2,
+  },
+  saveButtonText: {
+    color: 'white',
+    fontSize: 16,
+    fontWeight: '500',
+    marginLeft: 8,
+  },
+  
+  // Confirmation modal styles
+  confirmModalContainer: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  confirmModalContent: {
+    backgroundColor: 'white',
+    borderRadius: 16,
+    padding: 24,
+    width: '80%',
+    maxWidth: 400,
+    alignItems: 'center',
+  },
+  confirmModalTitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#333',
+    marginTop: 16,
+    marginBottom: 8,
+  },
+  confirmModalText: {
+    fontSize: 16,
+    color: '#555',
+    textAlign: 'center',
+    marginBottom: 24,
+  },
+  confirmModalButtons: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    width: '100%',
+  },
+  confirmDeleteButton: {
+    backgroundColor: '#F44336',
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    flex: 1,
+    marginLeft: 8,
+    alignItems: 'center',
+  },
+  confirmDeleteButtonText: {
+    color: 'white',
+    fontSize: 16,
+    fontWeight: '500',
+  },
+
 });
 
 export default HomePage;
